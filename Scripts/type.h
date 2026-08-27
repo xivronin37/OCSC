@@ -4,14 +4,21 @@
 #include "lexer.h"
 #include "parser.h"
 
+struct ArrayInfo {
+    TokenType elementType;
+    bool isImmutable;
+};
+
+
 class SymbolTable  {
     private:
         std::unordered_map<std::string, TokenType> table;
-        std::unordered_map<std::string, TokenType> arrays;
     public:
+        std::unordered_map<std::string, ArrayInfo> arrays;
+        
         void declare(const std::string& name, TokenType& type);
 
-        void arrayDeclare(const std::string& name, TokenType& elementType);
+        void arrayDeclare(const std::string& name, TokenType& elementType, bool isImmutable);
 
         TokenType lookup(const std::string& name) const;
 

@@ -31,8 +31,10 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Request: return "Request";
         case TokenType::Send: return "Send";
         case TokenType::Decouple: return "Decouple";
+        case TokenType::Enum: return "Enum";
         case TokenType::Number: return "Number";
         case TokenType::String: return "String";
+        case TokenType::Str: return "Str";
         case TokenType::Plus: return "Plus";
         case TokenType::Minus: return "Minus";
         case TokenType::Star: return "Star";
@@ -47,6 +49,9 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::RParen: return "RParen";
         case TokenType::LBrace: return "LBrace";
         case TokenType::RBrace: return "RBrace";
+        case TokenType::Tilde: return "Tilde";
+        case TokenType::Dot: return "Dot";
+        case TokenType::Backtick: return "Backtick";
         case TokenType::Equal: return "Equal";
         case TokenType::EqualEqual: return "EqualEqual";
         case TokenType::NotEqual: return "NotEqual";
@@ -70,6 +75,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::UnsignedFloat: return "UnsignedFloat";
         case TokenType::EndOfFile: return "EndOfFile";
     }
+
     return "Unknown"; 
 }
 
@@ -136,12 +142,18 @@ ASTNode* Parser::statement() {
         size_t savedPos = pos;
         ASTNode* target = primary();
         if (peek().type == TokenType::Equal || peek().type == TokenType::Tilde) {
-            return assignStatement();
+            return assignStatement(target);
         }
+
+        pos = savedPos;
     }
 
     if (peek().type == TokenType::Create) {
         return funcDecl();
+    }
+
+    if (peek().type == TokenType::Open || peek().type == TokenType::Class) {
+        return classDecl();
     }
 
     if (peek().type == TokenType::Push) return pushStatement();
@@ -149,6 +161,14 @@ ASTNode* Parser::statement() {
 
     if (peek().type == TokenType::Out) {
         return outStatement();
+    }
+
+    if (peek().type == TokenType::Backtick) {
+        return printStatement();
+    }
+
+    if (peek().type == TokenType::Enum) {
+        return enumDecl();
     }
 
     return exprstatement();
@@ -176,7 +196,42 @@ ASTNode* Parser::varDecl() {
         expect(TokenType::BSlash);
         expect(TokenType::Semicolon);
 
-        return new ArrayDeclNode{name, newInfo.elementType, newInfo.params[0], elements};
+        return new ArrayDeclNode{name, newInfo.elementType, newInfo.params[0], elements, false};
+    }
+    else if (peek().type == TokenType::Str) {
+        advance();
+        expect(TokenType::Comma);
+        Token literal = expect(TokenType::String);
+        expect(TokenType::Semicolon);
+        std::vector<ASTNode*> elements;
+
+        for (const char& c : literal.value) {
+            std::string ascii = std::to_string(static_cast<int>(c));
+            elements.push_back(new NumberLiteralNode(ascii));
+        }
+
+        Token elementType{TokenType::Int, "i", name.line, name.column};
+
+        return new ArrayDeclNode{name, elementType, (int)elements.size(), elements, true}; // Strings are currently ArrayDecl for temporary optimization
+    }
+    else if (peek().type == TokenType::Char) {
+        advance();
+        expect(TokenType::Comma);
+        int savedPos = peek().line;
+        Token literal = expect(TokenType::Character);
+        if (literal.value == "") {
+            throw std::runtime_error("P: E42-1 | Cannot parse an empty character at line " + std::to_string(savedPos));
+        }
+
+        expect(TokenType::Semicolon);
+
+        std::vector<ASTNode*> elements;
+        std::string ascii = std::to_string(static_cast<int>(literal.value[0]));
+        elements.push_back(new NumberLiteralNode(ascii));
+
+        Token elementType{TokenType::Int, "i", name.line, name.column};
+
+        return new ArrayDeclNode{name, elementType, 1, elements, true};
     }
 
     Token type = expectType();
@@ -295,6 +350,33 @@ ASTNode* Parser::classDecl() {
     return new StructDeclNode{name, fields};
 }
 
+ASTNode* Parser::enumDecl() {
+    std::vector<ASTNode*> statements;
+
+    expect(TokenType::Enum);
+    expect(TokenType::Identifier);
+    expect(TokenType::LBracket);
+
+    int counter = -1;
+
+    while (peek().type != TokenType::RBracket) {
+        Token enumName = expect(TokenType::Identifier);
+        if (peek().type != TokenType::RBracket) {
+            expect(TokenType::Comma);
+        }
+
+        counter++;
+
+        Token enumType{TokenType::Int, "i", enumName.line, enumName.column};
+
+        statements.push_back(new VarDeclNode{enumName, enumType, new NumberLiteralNode(std::to_string(counter))});
+    }
+
+    expect(TokenType::RBracket);
+
+    return new BlockNode{statements};
+}
+
 ASTNode* Parser::outStatement() {
     expect(TokenType::Out);
     ASTNode* output = expression();
@@ -332,6 +414,16 @@ ASTNode* Parser::removeStatement() {
     expect(TokenType::Semicolon);
     
     return new RemoveNode{arrayName, index};
+}
+
+ASTNode* Parser::printStatement() {
+    expect(TokenType::Backtick);
+    expect(TokenType::LParen);
+    ASTNode* value = expression();
+    expect(TokenType::RParen);
+    expect(TokenType::Semicolon);
+
+    return new PrintNode{value};
 }
 
 ASTNode* Parser::exprstatement() {
@@ -434,9 +526,20 @@ ASTNode* Parser::primary() {
             Token field = advance();
 
             return new FieldAccessNode{new IdentifierNode(id.value), field};
-
-
         }
+
+        if (peek().type == TokenType::Character) {
+            int savedPos = peek().line;
+            Token literal = advance();
+            if (literal.value == "") {
+                throw std::runtime_error("P: E42-2 | Cannot parse an empty character at line: " + std::to_string(savedPos));
+            }
+
+            std::string ascii = std::to_string(static_cast<int>(literal.value[0]));
+
+            return new NumberLiteralNode{ascii};
+        }
+        
 
         return new IdentifierNode(id.value);
     }
@@ -499,7 +602,7 @@ ASTNode* Parser::block() {
 
     expect(TokenType::RBracket);
 
-    return new BlockNode(statements);
+    return new BlockNode{statements};
 }
 
 Parser::Parser(const std::vector<Token>& tokens, std::filesystem::path currentDir) : tokens(tokens), currentDir(currentDir) {}
@@ -566,6 +669,11 @@ void printAST(ASTNode* node, int depth) {
         std::cout << indent << "Identifier: " << i->value << "\n";
     }
 
+    else if (auto assign = dynamic_cast<AssignNode*>(node)) {
+        std::cout << indent << "Assignment: " << "\n";
+        printAST(assign->value, depth + 1);
+    }
+
     else if (auto blk = dynamic_cast<BlockNode*>(node)) {
         std::cout << indent << "Block:\n";
         for (auto stmt : blk->statements) {
@@ -588,6 +696,57 @@ void printAST(ASTNode* node, int depth) {
     else if (auto idx = dynamic_cast<IndexNode*>(node)) {
         std::cout << "Index: " << "\n";
         printAST(idx->index, depth + 1);
+    }
+
+    else if (auto funcDecl = dynamic_cast<FuncDeclNode*>(node)) {
+        std::cout << indent << "FuncDecl: " << funcDecl->name.value << "\n";
+        std::cout << indent << "Parameters: " << "\n";
+        depth++;
+        for (auto param : funcDecl->parameters) {
+            std::cout << indent << param.name.value << "\n";
+        }
+    }
+
+    else if (auto callNode = dynamic_cast<CallNode*>(node)) {
+        std::cout << indent << "Call: " << callNode->name.value << "\n";
+        for (auto arg : callNode->arguments) {
+            printAST(arg, depth + 1);
+        }
+
+    }
+
+    else if (auto structDecl = dynamic_cast<StructDeclNode*>(node)) {
+        std::cout << "Class: " << structDecl->name.value << "\n";
+        for (auto& field : structDecl->fields) {
+            std::cout << indent << "  " << field.type.value << ": " << field.name.value << "\n";
+        }
+    }
+
+    else if (auto inst = dynamic_cast<InstanceNode*>(node)) {
+        std::cout << indent << "Instance: " << inst->structName.value << "\n";
+        for (auto arg : inst->arguments) {
+            printAST(arg, depth + 1);
+        }
+    }
+
+    else if (auto field = dynamic_cast<FieldAccessNode*>(node)) {
+        std::cout << indent << "FieldAccess: ." << field->field.value << "\n";
+        printAST(field->target, depth + 1);
+    }
+
+    else if (auto push = dynamic_cast<PushNode*>(node)) {
+        std::cout << indent << "Push:" << "\n";
+        printAST(push->value, depth + 1);
+    }
+
+    else if (auto remove = dynamic_cast<RemoveNode*>(node)) {
+        std::cout << indent << "Remove element at index: " << "\n";
+        printAST(remove->index, depth + 1);
+    }
+
+    else if (auto printNode = dynamic_cast<PrintNode*>(node)) {
+        std::cout << indent << "Print: " << "\n";
+        printAST(printNode->value, depth + 1);
     }
 
     else {

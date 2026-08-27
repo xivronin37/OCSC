@@ -79,9 +79,10 @@ struct ArrayDeclNode : VarDeclNode {
     Token elementType;
     int size;
     std::vector<ASTNode*> elements;
+    bool isImmutable;
 
-    ArrayDeclNode(Token name, Token elementType, int size, std::vector<ASTNode*> elements) : VarDeclNode(name, elementType, nullptr),
-    elementType(elementType), size(size), elements(elements) {}
+    ArrayDeclNode(Token name, Token elementType, int size, std::vector<ASTNode*> elements, bool isImmutable) : VarDeclNode(name, elementType, nullptr),
+    elementType(elementType), size(size), elements(elements), isImmutable(isImmutable) {}
 };
 
 struct StructDeclNode : ASTNode {
@@ -99,10 +100,10 @@ struct InstanceNode : ASTNode {
 };
 
 struct FieldAccessNode : ASTNode {
-    ASTNode target;
+    ASTNode* target;
     Token field;
 
-    FieldAccessNode(ASTNode target, Token field) : target(target), field(field){}
+    FieldAccessNode(ASTNode* target, Token field) : target(target), field(field){}
 
 };
 
@@ -114,13 +115,30 @@ struct IndexNode : ASTNode {
 };
 
 struct AssignNode : ASTNode {
-    Token target;
+    ASTNode* target;
     Token op;
     ASTNode* value;
 
-    AssignNode(Token target, Token op, ASTNode* value) : target(target), op(op), value(value) {}
+    AssignNode(ASTNode* target, Token op, ASTNode* value) : target(target), op(op), value(value) {}
 };
 
+struct PushNode : ASTNode {
+    Token arrayName;
+    ASTNode* value;
+    PushNode(Token arrayName, ASTNode* value) : arrayName(arrayName), value(value) {}
+};
+
+struct RemoveNode : ASTNode {
+    Token arrayName;
+    ASTNode* index;
+    RemoveNode(Token arrayName, ASTNode* index) : arrayName(arrayName), index(index) {}
+};
+
+struct PrintNode : ASTNode {
+    ASTNode* value;
+
+    PrintNode(ASTNode* value) : value(value) {}
+};
 
 struct FuncDeclNode : ASTNode {
     Token returnType;

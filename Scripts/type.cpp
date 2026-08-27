@@ -21,7 +21,7 @@ TokenType SymbolTable::lookup(const std::string& name) const {
     if (t_it != table.end()) return t_it->second;
 
     auto a_it = arrays.find(name);
-    if (a_it != arrays.end()) return a_it->second;
+    if (a_it != arrays.end()) return a_it->second.elementType;
 
     throw std::runtime_error("TC: E2 | '" + name + "' is not declared");
 }
@@ -34,12 +34,13 @@ bool SymbolTable::arrayExists(const std::string& name) const {
     return arrays.find(name) != arrays.end();
 }
 
-void SymbolTable::arrayDeclare(const std::string& name, TokenType& elementType) {
+void SymbolTable::arrayDeclare(const std::string& name, TokenType& elementType, bool isImmutable) {
     if (isDeclared(name)) {
         throw std::runtime_error("TC: E3 | '" + name + "' is already declared");
     }
 
-    arrays[name] = elementType;
+    arrays[name].elementType = elementType;
+    arrays[name].isImmutable = isImmutable;
 }
 
 void SymbolTable::remove(const std::string& name) {
@@ -97,12 +98,12 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             counter++;
         }
 
-        if (arr->elements.size() != arr->size) {
+        if (arr->elements.size() > arr->size) {
             throw std::runtime_error("TC: E7 | Array '" + arr->name.value + "' declared size " 
                 + std::to_string(arr->size) + " but got " + std::to_string(arr->elements.size()) + " elements");
         }
 
-        symbols.arrayDeclare(arr->name.value, declaredType);
+        symbols.arrayDeclare(arr->name.value, declaredType, arr->isImmutable);
 
         return declaredType;
     }
@@ -297,21 +298,39 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
     if (auto push = dynamic_cast<PushNode*>(node)) {
         if (!(symbols.arrayExists(push->arrayName.value))) {
-            throw std::runtime_error("TC: E38 |'" + push->arrayName.value + "'is not an array");
+            throw std::runtime_error("TC: E38-1 |'" + push->arrayName.value + "' is not an array");
         }
 
         TokenType elementType = symbols.lookup(push->arrayName.value);
         TokenType valueType = TypeCheck(push->value);
 
         if (elementType != valueType) {
-            throw std::runtime_error("TC: E39 | Cannot push value due to type mismatch, expecting: " + tokenTypeName(valueType));
+            throw std::runtime_error("TC: E39 | Cannot push value due to type mismatch, expecting: " + tokenTypeName(elementType));
         }
+
+        if (symbols.arrays[push->arrayName.value].isImmutable) {
+            throw std::runtime_error("TC: E43-1 | Cannot push onto an immutable array: '" + push->arrayName.value + "'");
+        }
+
+        return TokenType::Sentinel;
     }
 
     if (auto remove = dynamic_cast<RemoveNode*>(node)) {
-        
-    }
+        if (!(symbols.arrayExists(remove->arrayName.value))) {
+            throw std::runtime_error("TC: E38-2 |'" + remove->arrayName.value + "' is not an array");
+        }
 
+        if (TypeCheck(remove->index) != TokenType::Int) {
+            throw std::runtime_error("TC: E40 | Non-integer index cannot be used");
+        }
+
+        if (symbols.arrays[remove->arrayName.value].isImmutable) {
+            throw std::runtime_error("TC: E43-2 | Cannot push onto an immutable array: '" + remove->arrayName.value + "'");
+        }
+
+
+        return TokenType::Sentinel;
+    }
 
     if (auto callNode = dynamic_cast<CallNode*>(node)) {
         auto it = functions.find(callNode->name.value);
@@ -343,6 +362,17 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             return outType;
         } else {
             throw std::runtime_error("TC: E23 | Expected: " + tokenTypeName(returnType) + " Got: " + tokenTypeName(outType));
+        }
+    }
+
+    if (auto printValue = dynamic_cast<PrintNode*>(node)) {
+        TokenType printType = TypeCheck(printValue->value);
+
+        if (printType == TokenType::Int) {
+            return printType;
+        }
+        else {
+            throw std::runtime_error("TC: E41 | Expected int type, got: " + tokenTypeName(printType));
         }
     }
 

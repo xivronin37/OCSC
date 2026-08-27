@@ -10,15 +10,16 @@
 enum class TokenType {
     Identifier,
     Keyword,
-    Let, If, Else, While, Out, Call, Create, Open, Class, Insert, From, As, Inline, Request, Send, Decouple,
+    Let, If, Else, While, Out, Call, Create, Open, Class, Insert, From, As, Inline, Request, Send, Decouple, Enum,
     Number,
     String,
+    Character,
     Plus, Minus, Star, FSlash, BSlash, Colon, Semicolon, Comma, LBracket, RBracket, LParen, RParen, LBrace, RBrace, Tilde,
-    Equal, EqualEqual, NotEqual, LessThan, GreaterThan, LessThanOrEqual, GreaterThanOrEqual, Question, Dot,
+    Equal, EqualEqual, NotEqual, LessThan, GreaterThan, LessThanOrEqual, GreaterThanOrEqual, Question, Dot, Backtick,
     L_AND, L_OR, L_NOT, L_XOR, B_AND, B_OR, B_NOT, B_XOR,
     Punctuation,
-    Array, Hash, Struct,
-    Int, Bool, Float, Null, UnsignedInt, UnsignedFloat, Sentinel,
+    Array, Hash, Struct, Push, Remove,
+    Int, Bool, Float, Null, UnsignedInt, UnsignedFloat, Str, Char, Sentinel,
     Unknown,
     EndOfFile
 };
@@ -36,7 +37,10 @@ inline const std::unordered_map<std::string, TokenType> keywords = {
     {"insert", TokenType::Insert},
     {"from", TokenType::From},
     {"as", TokenType::As},
+    {"enum", TokenType::Enum},
     {"inline", TokenType::Inline},
+    {"push", TokenType::Push},
+    {"remove", TokenType::Remove},
     {"request", TokenType::Request},
     {"send", TokenType::Send},
     {"decouple", TokenType::Decouple}
@@ -50,7 +54,8 @@ inline const std::unordered_map<std::string, TokenType> types = {
     {"ui", TokenType::UnsignedInt},
     {"uf", TokenType::UnsignedFloat},
     {"arr", TokenType::Array},
-    {"str", TokenType::String}
+    {"str", TokenType::Str},
+    {"c", TokenType::Char}
 };
 
 

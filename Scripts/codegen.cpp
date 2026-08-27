@@ -15,7 +15,12 @@ int countVarDecl(ASTNode* node) {
     }
 
     if (auto varDecl = dynamic_cast<VarDeclNode*>(node)) {
-        counter++;
+        if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
+            counter += inst->arguments.size();
+        }
+        else {
+            counter++;
+        }
     }
 
     if (auto block = dynamic_cast<BlockNode*>(node)) {
@@ -33,6 +38,10 @@ int countVarDecl(ASTNode* node) {
 
     if (auto whileNode = dynamic_cast<WhileNode*>(node)) {
         counter += countVarDecl(whileNode->body);
+    }
+
+    if (auto removeNode = dynamic_cast<RemoveNode*>(node)) {
+        counter++;
     }
 
     return counter;
@@ -154,7 +163,7 @@ void CodeGen::genNode(ASTNode* node) {
         if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
             int baseOffset = currentOffset - 8;
 
-            for (size_t i = 0; i < arrDecl->elements.size(); i++) {
+            for (size_t i = 0; i < inst->arguments.size(); i++) {
                 genNode(inst->arguments[i]);
 
                 currentOffset -= 8;
@@ -172,9 +181,10 @@ void CodeGen::genNode(ASTNode* node) {
     }
     
     if (auto idx = dynamic_cast<IndexNode*>(node)) {
-    genNode(idx->index);
-    int baseOffset = symbolTable[idx->name.value];
-    emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
+        genNode(idx->index);
+        emit("negq %rax");
+        int baseOffset = symbolTable[idx->name.value];
+        emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
     }
 
     if (auto field = dynamic_cast<FieldAccessNode*>(node)) {
@@ -199,12 +209,74 @@ void CodeGen::genNode(ASTNode* node) {
         }
 
         if (!found) {
-            throw std::runtime_error("CG: E35-1 | Undefined field: " + target->value);
+            throw std::runtime_error("CG: E35-1 | Undefined field: " + field->field.value);
         }
 
         int finalOffset = baseOffset - count*8;
 
         emit(std::format("movq {}(%rbp), %rax", finalOffset));
+    }
+
+    if (auto push = dynamic_cast<PushNode*>(node)) {
+        genNode(push->value);
+        emit("pushq %rax");
+
+        int baseOffset = symbolTable[push->arrayName.value];
+        int length = baseOffset + 8;
+
+        emit(std::format("movq {}(%rbp), %rax", length));
+        emit("negq %rax");
+        emit("popq %rbx");
+        emit(std::format("movq %rbx, {}(%rbp, %rax, 8) ", baseOffset)); // offset it
+
+        emit(std::format("movq {}(%rbp), %rax", length));
+        emit("addq $1, %rax");
+        emit(std::format("movq %rax, {}(%rbp)", length)); // write length back to memory
+
+    }
+
+    if (auto remove = dynamic_cast<RemoveNode*>(node)) {
+        int lengthOffset = symbolTable[remove->arrayName.value] + 8;
+        int baseOffset = lengthOffset - 8;
+
+        genNode(remove->index);
+
+        currentOffset -= 8;
+        int counterOffset = currentOffset;
+
+        emit(std::format("movq %rax, {}(%rbp)", currentOffset));
+
+        int id = uniqueCount++;
+        
+        std::string startLabel = std::format("START{}", id);
+        std::string endLabel = std::format("END{}", id);
+
+        emit(startLabel + ":", false);
+
+        emit(std::format("movq {}(%rbp), %rcx", counterOffset));
+        emit(std::format("movq {}(%rbp), %rdx", lengthOffset));
+        emit("subq $1, %rdx");
+        emit("cmpq %rdx, %rcx");
+
+        emit(std::format("jge {}", endLabel));
+
+        emit("negq %rcx");
+        emit("movq %rcx, %r10");
+        emit("subq $1, %r10");
+        emit(std::format("movq {}(%rbp, %r10, 8), %rax", baseOffset)); // read element at index: counter + 1
+        emit(std::format("movq %rax, {}(%rbp, %rcx, 8)", baseOffset)); // write current element to index: counter
+
+        emit("negq %rcx");
+        emit("incq %rcx"); // counterOffset++
+        emit(std::format("movq %rcx, {}(%rbp)", counterOffset)); // write back to memory
+
+        emit(std::format("jmp {}", startLabel));
+
+        emit(endLabel + ":", false);
+
+        emit(std::format("movq {}(%rbp), %rdx", lengthOffset));
+        emit("subq $1, %rdx");
+        emit(std::format("movq %rdx, {}(%rbp)", lengthOffset));
     }
 
     if (auto id = dynamic_cast<IdentifierNode*>(node)) {
@@ -220,6 +292,7 @@ void CodeGen::genNode(ASTNode* node) {
     }
 
     if (auto assign = dynamic_cast<AssignNode*>(node)) {
+        
         if (auto id = dynamic_cast<IdentifierNode*>(assign->target)) {
             genNode(assign->value);
             auto it = symbolTable.find(id->value);
@@ -260,7 +333,7 @@ void CodeGen::genNode(ASTNode* node) {
 
             int finalOffset = baseOffset - count*8;
 
-            emit(std::format("movq {}(%rbp), %rax", finalOffset));
+            emit(std::format("movq %rax, {}(%rbp)", finalOffset));
         }
 
         else if (auto idx = dynamic_cast<IndexNode*>(assign->target)) {
@@ -268,6 +341,7 @@ void CodeGen::genNode(ASTNode* node) {
             emit("pushq %rax");
 
             genNode(idx->index);
+            emit("negq %rax");
             emit("movq %rax, %rbx");
 
             emit("popq %rax");
@@ -406,17 +480,32 @@ void CodeGen::genNode(ASTNode* node) {
         emit("leave");
         emit("ret");
     }
+
+    if (auto printNode = dynamic_cast<PrintNode*>(node)) {
+        genNode(printNode->value);
+        emit("movq %rax, %rdx");
+        emit("leaq fmt(%rip), %rcx");
+        emit("subq $32, %rsp");
+        emit("call printf");
+        emit("addq $32, %rsp");
+    }
+
+
 }
 
 std::string CodeGen::generate(ASTNode* root) {
+    emit(".data", false);
+    emit("fmt: .string \"%d\\n\"", false);
+    emit(".text", false);
     emit(".global main", false);
     emit(".def main; .scl 2; .type 32; .endef", false);
     emit("main:", false);
 
-    int counter = countVarDecl(root) * 8;
+    int allocatedBytes = countVarDecl(root) * 8;
+    allocatedBytes = (allocatedBytes  + 15) & ~15;
     emit("pushq %rbp");
     emit("movq %rsp, %rbp");
-    emit(std::format("subq ${}, %rsp", counter));
+    emit(std::format("subq ${}, %rsp", allocatedBytes));
     genNode(root);
     emit("leave");
     emit("ret");

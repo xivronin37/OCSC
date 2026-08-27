@@ -9,6 +9,7 @@ char Lexer::peek() const {
     }
     return '\0';
 }
+
 char Lexer::advance() {
     char c = source[pos];
     column++;
@@ -85,6 +86,21 @@ Token Lexer::nextToken() {
 
         return {TokenType::String, StringLiteral, line, column};
     }
+
+     if (c == '\'') {
+        std::string CharLiteral = "";
+
+        advance(); // eat opening quote
+        
+        if (peek() != '\'') {
+            CharLiteral += advance();
+        }
+
+        advance(); // eat closing quote
+
+        return {TokenType::Character, CharLiteral, line, column};
+    }
+
     char op = advance();
     switch (op) {
         default: return {TokenType::Unknown, std::string(1, op), line, column};
@@ -106,6 +122,7 @@ Token Lexer::nextToken() {
         case('#'): return {TokenType::Hash, "#", line, column};
         case('?'): return {TokenType::Question, "?", line, column};
         case('.'): return {TokenType::Dot, ".", line, column};
+        case('`'): return {TokenType::Backtick, "`", line, column};
         case('='): {
             if (peek() == '=') {
                 advance();

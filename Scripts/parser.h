@@ -32,6 +32,7 @@ class Parser {
         ASTNode* whileStatement();
         ASTNode* funcDecl();
         ASTNode* classDecl();
+        ASTNode* enumDecl();
         ASTNode* expression();
         ASTNode* comparison();
         ASTNode* term();
@@ -44,6 +45,7 @@ class Parser {
         ASTNode* outStatement();
         ASTNode* pushStatement();
         ASTNode* removeStatement();
+        ASTNode* printStatement();
 
 };
 

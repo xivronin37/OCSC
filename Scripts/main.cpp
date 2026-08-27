@@ -16,7 +16,7 @@ int main() {
         std::vector<Token> tokens = lexer.tokenize();
 
         for (auto token : tokens) {
-            std::cout << "Type: " << tokenTypeName(token.type) << " Lexeme: " << token.value << std::endl;
+            std::cout << "Type: " << tokenTypeName(token.type) << " | Lexeme: " << token.value << " | Line:" << token.line << std::endl;
         }
 
         Parser parser(tokens, filePath.parent_path());
@@ -31,7 +31,7 @@ int main() {
 
         std::cout << "TypeCheck succeeded. Result type: " << tokenTypeName(resultType) << "\n";
 
-        CodeGen codegen;
+        CodeGen codegen(checker);
 
         std::string assembly = codegen.generate(root); 
 
