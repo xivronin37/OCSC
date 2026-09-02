@@ -7,6 +7,7 @@
 #include "lexer.h"
 #include "ast.h"
 #include "parser.h"
+#include "otools.h"
 
 
 std::string tokenTypeName(TokenType type) {
@@ -25,6 +26,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Insert: return "Insert";
         case TokenType::From: return "From";
         case TokenType::As: return "As";
+        case TokenType::Map: return "Map";
         case TokenType::Inline: return "Inline";
         case TokenType::Push: return "Push";
         case TokenType::Remove: return "Remove";
@@ -108,7 +110,8 @@ Token Parser::expect(TokenType type) {
 Token Parser::expectType() {
     TokenType t = peek().type;
     if (t == TokenType::Int || t == TokenType::Bool || t == TokenType::Float || t == TokenType::Null
-        || t == TokenType::UnsignedInt || t == TokenType::UnsignedFloat || t == TokenType::Identifier) {
+        || t == TokenType::UnsignedInt || t == TokenType::UnsignedFloat || t == TokenType::Identifier
+        || t == TokenType::String || t == TokenType::Character) {
         return advance();
     }
 
@@ -178,26 +181,15 @@ ASTNode* Parser::varDecl() {
     expect(TokenType::Let);
     Token name = expect(TokenType::Identifier);
     expect(TokenType::Colon);
+
     if (peek().type == TokenType::LBrace) {
-        std::vector<ASTNode*> elements;
         typeBlockInfo newInfo = typeBlock();
         expect(TokenType::Comma);
-        expect(TokenType::BSlash);
-
-        while (peek().type != TokenType::BSlash) {
-            if (peek().type == newInfo.elementType.type) {
-                elements.push_back(expression());
-            } else {
-                throw std::runtime_error("P: E29 | Expected type: " + tokenTypeName(newInfo.elementType.type) + "Got: " +tokenTypeName(peek().type));
-            }
-            if (peek().type == TokenType::Comma) advance();
-        }
-
-        expect(TokenType::BSlash);
-        expect(TokenType::Semicolon);
+        std::vector<ASTNode*> elements = parseList(newInfo.elementType.type);
 
         return new ArrayDeclNode{name, newInfo.elementType, newInfo.params[0], elements, false};
     }
+
     else if (peek().type == TokenType::Str) {
         advance();
         expect(TokenType::Comma);
@@ -233,12 +225,32 @@ ASTNode* Parser::varDecl() {
 
         return new ArrayDeclNode{name, elementType, 1, elements, true};
     }
-
+    else if (peek().type == TokenType::Map) {
+        return mapDecl(name);
+    }
+    
     Token type = expectType();
     expect(TokenType::Comma);
     ASTNode* value = expression(); 
     expect(TokenType::Semicolon);
     return new VarDeclNode{name, type, value};
+}
+
+std::vector<ASTNode*> Parser::parseList(TokenType expectedType) {
+    std::vector<ASTNode*> elements;
+    expect(TokenType::BSlash);
+
+    while (peek().type != TokenType::BSlash) {
+        if (peek().type == expectedType) {
+            elements.push_back(expression());
+        } else {
+            throw std::runtime_error("P: E29 | Expected type: " + tokenTypeName(expectedType) + "Got: " +tokenTypeName(peek().type));
+        }
+        if (peek().type == TokenType::Comma) advance();
+    }
+
+    expect(TokenType::BSlash);
+    return elements;
 }
 
 typeBlockInfo Parser::typeBlock() {
@@ -377,6 +389,35 @@ ASTNode* Parser::enumDecl() {
     return new BlockNode{statements};
 }
 
+ASTNode* Parser::mapDecl(Token name) {
+    expect(TokenType::Map);
+    expect(TokenType::LParen);
+    Token keyType = expectType();
+    expect(TokenType::Comma);
+    Token valueType = expectType();
+    expect(TokenType::Comma);
+    ASTNode* size = expression();
+
+    if (dynamic_cast<CollectionNode*>(size)) {
+        throw std::runtime_error("P: E45 | Map size cannot be a collection or array definition");
+    }
+
+    expect(TokenType::RParen);
+    expect(TokenType::Comma);
+    std::vector<ASTNode*> keysVector = parseList(keyType.type);
+    expect(TokenType::Comma);
+    std::vector<ASTNode*> valuesVector = parseList(valueType.type);
+
+    int convertedSize = evaluateConstant(size);
+
+    ArrayDeclNode* keys = new ArrayDeclNode{name, keyType, convertedSize, keysVector, false};
+    ArrayDeclNode* values = new ArrayDeclNode{name, valueType, convertedSize, valuesVector, false};
+
+    expect(TokenType::Semicolon);
+
+    return new MapDeclNode{name, keyType, valueType, size, keys, values};
+}
+
 ASTNode* Parser::outStatement() {
     expect(TokenType::Out);
     ASTNode* output = expression();
@@ -395,13 +436,22 @@ ASTNode* Parser::assignStatement(ASTNode* target) {
 ASTNode* Parser::pushStatement() {
     expect(TokenType::Push);
     expect(TokenType::LParen);
-    Token arrayName = expect(TokenType::Identifier);
+    Token name = expect(TokenType::Identifier);
     expect(TokenType::Comma);
     ASTNode* value = expression();
+    if (peek().type == TokenType::Comma) {
+        advance();
+        ASTNode* secondValue = expression();
+        expect(TokenType::RParen);
+        expect(TokenType::Semicolon);
+
+        return new PushNode{name, value, secondValue}; // pushing the key (value) and value (secondValue) onto a map
+
+    }
     expect(TokenType::RParen);
     expect(TokenType::Semicolon);
 
-    return new PushNode{arrayName, value};
+    return new PushNode{name, value, nullptr};
 }
 
 ASTNode* Parser::removeStatement() {
@@ -540,9 +590,25 @@ ASTNode* Parser::primary() {
             return new NumberLiteralNode{ascii};
         }
         
-
         return new IdentifierNode(id.value);
     }
+
+    if (peek().type == TokenType::String) {
+            Token literal = advance();
+            std::vector<ASTNode*> elements;
+
+            for (const char& c : literal.value) {
+                std::string ascii = std::to_string(static_cast<int>(c));
+                elements.push_back(new NumberLiteralNode(ascii));
+            }
+
+            std::string stringName = std::format("str_{}", p_uniqueCount++);
+
+            Token elementType{TokenType::Int, "i", literal.line, literal.column};
+            Token name{TokenType::Str, stringName, literal.line, literal.column};
+
+            return new ArrayDeclNode{name, elementType, (int)elements.size(), elements, true};
+        }
 
     if (peek().type == TokenType::Call) {
         // if calling function
@@ -698,6 +764,14 @@ void printAST(ASTNode* node, int depth) {
         printAST(idx->index, depth + 1);
     }
 
+    else if (auto mapDecl = dynamic_cast<MapDeclNode*>(node)) {
+        std::cout << "Map:" << mapDecl->name.value << "\n";
+        std::cout << indent << "Keys:" << "\n";
+        printAST(mapDecl->keys, depth + 1);
+        std::cout << indent << "Values:" << "\n";
+        printAST(mapDecl->values, depth + 1);
+    }
+
     else if (auto funcDecl = dynamic_cast<FuncDeclNode*>(node)) {
         std::cout << indent << "FuncDecl: " << funcDecl->name.value << "\n";
         std::cout << indent << "Parameters: " << "\n";
@@ -706,7 +780,7 @@ void printAST(ASTNode* node, int depth) {
             std::cout << indent << param.name.value << "\n";
         }
     }
-
+    
     else if (auto callNode = dynamic_cast<CallNode*>(node)) {
         std::cout << indent << "Call: " << callNode->name.value << "\n";
         for (auto arg : callNode->arguments) {

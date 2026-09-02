@@ -20,6 +20,7 @@ class Parser {
         std::filesystem::path currentDir;
         std::vector<Token> tokens;
         size_t pos = 0;
+        int p_uniqueCount = 0;
 
         Token peek() const;
         Token advance();
@@ -33,6 +34,8 @@ class Parser {
         ASTNode* funcDecl();
         ASTNode* classDecl();
         ASTNode* enumDecl();
+        ASTNode* mapDecl(Token name);
+        std::vector<ASTNode*> parseList(TokenType expectedType);
         ASTNode* expression();
         ASTNode* comparison();
         ASTNode* term();

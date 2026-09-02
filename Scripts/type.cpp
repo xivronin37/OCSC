@@ -13,7 +13,7 @@ void SymbolTable::declare(const std::string& name, TokenType& type) {
 }
 
 bool SymbolTable::isDeclared(const std::string& name) const {
-    return exists(name) || arrayExists(name);
+    return exists(name) || arrayExists(name) || mapExists(name);
 }
 
 TokenType SymbolTable::lookup(const std::string& name) const {
@@ -24,6 +24,14 @@ TokenType SymbolTable::lookup(const std::string& name) const {
     if (a_it != arrays.end()) return a_it->second.elementType;
 
     throw std::runtime_error("TC: E2 | '" + name + "' is not declared");
+}
+
+TokenType SymbolTable::mapKeyType(const std::string& name) const {
+    return maps.at(name).keyType;
+}
+
+TokenType SymbolTable::mapValueType(const std::string& name) const {
+    return maps.at(name).valueType;
 }
 
 bool SymbolTable::exists(const std::string& name) const {
@@ -43,6 +51,21 @@ void SymbolTable::arrayDeclare(const std::string& name, TokenType& elementType, 
     arrays[name].isImmutable = isImmutable;
 }
 
+void SymbolTable::mapDeclare(const std::string& name, TokenType& keyType, TokenType& valueType, bool isImmutable) {
+    if (isDeclared(name)) {
+        throw std::runtime_error("TC: E52 | '" + name + "' is already declared");
+    }
+
+    maps[name].keyType = keyType;
+    maps[name].valueType = valueType;
+    maps[name].isImmutable = isImmutable;
+
+}
+
+bool SymbolTable::mapExists(const std::string& name) const {
+    return maps.find(name) != maps.end();
+}
+
 void SymbolTable::remove(const std::string& name) {
     table.erase(name);
 }
@@ -50,7 +73,7 @@ void SymbolTable::remove(const std::string& name) {
 bool TypeChecker::nameTaken(const std::string& name) {
     if (structTable.find(name) != structTable.end()) return true;
     if (functions.find(name) != functions.end()) return true;
-    return symbols.exists(name) || symbols.arrayExists(name);
+    return symbols.isDeclared(name);
 }
 
 TokenType TypeChecker::TypeCheck(ASTNode* node) {
@@ -109,13 +132,24 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
     }
 
     if (auto idx = dynamic_cast<IndexNode*>(node)) {
+
+        if (!(symbols.arrayExists(idx->name.value))) {
+            if (symbols.mapExists(idx->name.value)) {
+                TokenType keyType = symbols.mapKeyType(idx->name.value);
+
+                if (TypeCheck(idx->index) != keyType) {
+                    throw std::runtime_error("TC: E53 | Invalid key index");
+                }
+
+                return symbols.mapValueType(idx->name.value);
+            }
+
+            throw std::runtime_error("TC: E9 | '" + idx->name.value + "' is not an array");
+        } 
+
         if (TokenType::Int != TypeCheck(idx->index)) {
             throw std::runtime_error("TC: E8 | Non-integer index for identifier '" + idx->name.value + "'");
         }
-
-        if (!(symbols.arrayExists(idx->name.value))) {
-            throw std::runtime_error("TC: E9 | '" + idx->name.value + "' is not an array");
-        } 
 
         return symbols.lookup(idx->name.value);
     }
@@ -296,7 +330,67 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
     }
 
+    if (auto mapDecl = dynamic_cast<MapDeclNode*>(node)) {
+        if (mapDecl->keyType.type == TokenType::Int || mapDecl->keyType.type == TokenType::Bool
+            || mapDecl->keyType.type == TokenType::Float || mapDecl->keyType.type == TokenType::String 
+            || mapDecl->keyType.type == TokenType::Character) {
+
+        } else {
+            throw std::runtime_error("TC: E46-1 | Invalid key type");
+        }
+
+        if (mapDecl->valueType.type == TokenType::Int || mapDecl->valueType.type == TokenType::Bool
+            || mapDecl->valueType.type == TokenType::Float || mapDecl->valueType.type == TokenType::String 
+            || mapDecl->valueType.type == TokenType::Character || mapDecl->valueType.type == TokenType::Struct) {
+
+        } else {
+            throw std::runtime_error("TC: E46-2 | Invalid value type");
+        }
+
+        if (mapDecl->keys->elements.size() != mapDecl->values->elements.size()) {
+            throw std::runtime_error("TC: E50 | Map keys and values count mismatch");
+        }
+
+
+        if (TypeCheck(mapDecl->size) != TokenType::Int) {
+            throw std::runtime_error("TC: E47 | Non-integer map size");
+        }
+
+        size_t mapSize = evaluateConstant(mapDecl->size);
+
+        if (mapSize < mapDecl->keys->elements.size() || mapSize < mapDecl->values->elements.size()) {
+            throw std::runtime_error("TC: E51 | Map size cannot exceed declared size");
+        }
+
+        std::string mapName = mapDecl->name.value;
+        TokenType keyType = mapDecl->keyType.type;
+        TokenType valueType = mapDecl->valueType.type;
+
+        symbols.mapDeclare(mapName, keyType, valueType, false);
+
+        return TokenType::Map;
+    }
+
     if (auto push = dynamic_cast<PushNode*>(node)) {
+        if (symbols.mapExists(push->arrayName.value)) {
+            TokenType keyType = symbols.mapKeyType(push->arrayName.value);
+            if (TypeCheck(push->value) != keyType) {
+                throw std::runtime_error("TC: E55 | Cannot push invalid key type");
+            }
+
+            if (push->secondValue == nullptr) {
+                throw std::runtime_error("TC: E56 | Map push must take two values");
+            }
+
+            TokenType valueType = symbols.mapValueType(push->arrayName.value);
+            if (TypeCheck(push->secondValue) != valueType) {
+                throw std::runtime_error("TC: E57 | Cannot push invalid value type");
+            }
+
+            return TokenType::Sentinel;
+        }
+
+
         if (!(symbols.arrayExists(push->arrayName.value))) {
             throw std::runtime_error("TC: E38-1 |'" + push->arrayName.value + "' is not an array");
         }
@@ -310,6 +404,10 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         if (symbols.arrays[push->arrayName.value].isImmutable) {
             throw std::runtime_error("TC: E43-1 | Cannot push onto an immutable array: '" + push->arrayName.value + "'");
+        }
+
+        if (push->secondValue != nullptr) {
+            throw std::runtime_error("TC: E54 | Array push takes only one value");
         }
 
         return TokenType::Sentinel;

@@ -4,12 +4,14 @@
 #include <string>
 #include "ast.h"
 #include "type.h"
+#include "otools.h"
 
 class CodeGen {
     private:
         TypeChecker& typeCheck;
         std::string output;
         std::unordered_map<std::string, int> symbolTable;
+        std::unordered_map<std::string, int> mapCapacities;
         int currentOffset = 0;
         int funcOffset = 0;
         int ifCounter = 0;
@@ -22,6 +24,14 @@ class CodeGen {
         std::string generate(ASTNode* root);
         CodeGen(TypeChecker& checker) : typeCheck(checker) {}
 
+};
+
+struct SentinelType {
+    TokenType type;
+
+    int64_t intValue = INT64_MIN;
+    std::string stringValue = "O_SENTINEL//1B7D2ED9B35F4F68//";
+    char charValue = '\0';
 };
 
 int countVarDecl(ASTNode* node);

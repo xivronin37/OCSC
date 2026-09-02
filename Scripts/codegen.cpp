@@ -16,7 +16,7 @@ int countVarDecl(ASTNode* node) {
 
     if (auto varDecl = dynamic_cast<VarDeclNode*>(node)) {
         if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
-            counter += inst->arguments.size();
+            counter += countVarDecl(inst);
         }
         else {
             counter++;
@@ -40,8 +40,42 @@ int countVarDecl(ASTNode* node) {
         counter += countVarDecl(whileNode->body);
     }
 
-    if (auto removeNode = dynamic_cast<RemoveNode*>(node)) {
+    if (auto push = dynamic_cast<PushNode*>(node)) {
+        counter += countVarDecl(push->value);
+        if (push->secondValue != nullptr) {
+            counter += countVarDecl(push->secondValue);
+        }
+    }
+
+    if (auto remove = dynamic_cast<RemoveNode*>(node)) {
         counter++;
+    }
+
+    if (auto mapDecl = dynamic_cast<MapDeclNode*>(node)) {
+        int size = evaluateConstant(mapDecl->size);
+
+        if (size < 0) {
+            throw std::runtime_error("CG: E50-1 | Map size cannot be negative");
+        }
+
+        counter += size * 2;
+        counter++;
+    }
+    
+    if (auto idx = dynamic_cast<IndexNode*>(node)) {
+        counter += countVarDecl(idx->index);
+    }
+    
+    if (auto inst = dynamic_cast<InstanceNode*>(node)) {
+        for (auto arg : inst->arguments) {
+            counter += countVarDecl(arg);
+        }
+    }
+
+    if (auto call = dynamic_cast<CallNode*>(node)) {
+        for (auto arg : call->arguments) {
+            counter += countVarDecl(arg);
+        }
     }
 
     return counter;
@@ -155,6 +189,8 @@ void CodeGen::genNode(ASTNode* node) {
         }
 
         symbolTable[name] = baseOffset;
+
+        emit(std::format("leaq {}(%rbp), %rax", baseOffset)); // load pointer into %rax
     }
     
     else if (auto varDecl = dynamic_cast<VarDeclNode*>(node)) {
@@ -181,10 +217,59 @@ void CodeGen::genNode(ASTNode* node) {
     }
     
     if (auto idx = dynamic_cast<IndexNode*>(node)) {
-        genNode(idx->index);
-        emit("negq %rax");
-        int baseOffset = symbolTable[idx->name.value];
-        emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
+        if (typeCheck.symbols.mapExists(idx->name.value)) {
+            genNode(idx->index);
+
+            currentOffset -= 8;
+            int keyOffset = currentOffset;
+            emit(std::format("movq %rax, {}(%rbp)", keyOffset));
+            currentOffset -= 8;
+            int counterOffset = currentOffset;
+            emit(std::format("movq $0, {}(%rbp)", counterOffset));
+            
+            int countOffset = symbolTable[idx->name.value + "_count"];
+            int keyBaseOffset = symbolTable[idx->name.value + "_keys"];
+            int valueBaseOffset = symbolTable[idx->name.value + "_values"];
+
+            int id = uniqueCount++;
+            std::string startLabel = std::format("START{}", id);
+            std::string endLabel = std::format("END{}", id);
+            std::string foundLabel = std::format("FOUND{}", id);
+            std::string doneLabel = std::format("DONE{}", id);
+
+            emit(startLabel + ":", false);
+
+            emit(std::format("movq {}(%rbp), %rcx", counterOffset));
+            emit(std::format("movq {}(%rbp), %rdx", countOffset));
+            emit("cmpq %rdx, %rcx");
+            emit(std::format("jge {}", endLabel));
+
+            emit("negq %rcx");
+            emit(std::format("movq {}(%rbp, %rcx, 8), %rax", keyBaseOffset)); // load index rcx to rax
+            emit("negq %rcx");
+            emit(std::format("cmpq {}(%rbp), %rax", keyOffset));
+            emit(std::format("je {}", foundLabel));
+            emit("incq %rcx");
+            emit(std::format("movq %rcx, {}(%rbp)", counterOffset));
+            emit(std::format("jmp {}", startLabel));
+
+            emit(foundLabel + ":", false);
+            emit("negq %rcx");
+            emit(std::format("movq {}(%rbp, %rcx, 8), %rax", valueBaseOffset));
+            emit(std::format("jmp {}", doneLabel));
+
+            emit(endLabel + ":", false);
+            emit("leaq mapMissMsg(%rip), %rcx");
+            emit("jmp runtime_error");
+
+            emit(doneLabel + ":", false);
+            
+        } else {
+            genNode(idx->index);
+            emit("negq %rax");
+            int baseOffset = symbolTable[idx->name.value];
+            emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
+        }
     }
 
     if (auto field = dynamic_cast<FieldAccessNode*>(node)) {
@@ -218,21 +303,56 @@ void CodeGen::genNode(ASTNode* node) {
     }
 
     if (auto push = dynamic_cast<PushNode*>(node)) {
-        genNode(push->value);
-        emit("pushq %rax");
+        if (typeCheck.symbols.mapExists(push->arrayName.value)) {
+            
+            genNode(push->value);
+            emit("pushq %rax");
+            genNode(push->secondValue);
+            emit("pushq %rax");
 
-        int baseOffset = symbolTable[push->arrayName.value];
-        int length = baseOffset + 8;
+            int id = uniqueCount++;
+            std::string doneLabel = std::format("DONE{}", id);
+            std::string mapOverflow = std::format("MAP_OVERFLOW{}", id);
 
-        emit(std::format("movq {}(%rbp), %rax", length));
-        emit("negq %rax");
-        emit("popq %rbx");
-        emit(std::format("movq %rbx, {}(%rbp, %rax, 8) ", baseOffset)); // offset it
+            int countOffset = symbolTable[push->arrayName.value + "_count"];
+            int keyBaseOffset = symbolTable[push->arrayName.value + "_keys"];
+            int valueBaseOffset = symbolTable[push->arrayName.value + "_values"];
 
-        emit(std::format("movq {}(%rbp), %rax", length));
-        emit("addq $1, %rax");
-        emit(std::format("movq %rax, {}(%rbp)", length)); // write length back to memory
+            emit(std::format("movq {}(%rbp), %rdx", countOffset));
+            int capacity = mapCapacities[push->arrayName.value];
+            emit(std::format("cmpq ${}, %rdx", capacity));
+            emit("jge " + mapOverflow);
+            
+            emit("popq %rax");
+            emit("negq %rdx");
+            emit(std::format("movq %rax, {}(%rbp, %rdx, 8)", valueBaseOffset));
+            emit("popq %rax");
+            emit(std::format("movq %rax, {}(%rbp, %rdx, 8)", keyBaseOffset));
+            emit("negq %rdx");
+            emit("incq %rdx");
+            emit(std::format("movq %rdx, {}(%rbp)", countOffset));
+            emit(std::format("jmp {}", doneLabel));
 
+            emit(mapOverflow + ":", false);
+            emit("leaq mapOverflowMsg(%rip), %rcx");
+            emit("jmp runtime_error");
+            emit(doneLabel + ":", false);
+        } else {
+            genNode(push->value);
+            emit("pushq %rax");
+
+            int baseOffset = symbolTable[push->arrayName.value];
+            int length = baseOffset + 8;
+
+            emit(std::format("movq {}(%rbp), %rax", length));
+            emit("negq %rax");
+            emit("popq %rbx");
+            emit(std::format("movq %rbx, {}(%rbp, %rax, 8) ", baseOffset)); // offset it
+
+            emit(std::format("movq {}(%rbp), %rax", length));
+            emit("incq %rax");
+            emit(std::format("movq %rax, {}(%rbp)", length)); // write length back to memory
+        }
     }
 
     if (auto remove = dynamic_cast<RemoveNode*>(node)) {
@@ -444,6 +564,42 @@ void CodeGen::genNode(ASTNode* node) {
         emit(std::format(".L_skip_{}:", funcDecl->name.value), false);
     }
 
+    if (auto mapDecl = dynamic_cast<MapDeclNode*>(node)) {
+        int size = evaluateConstant(mapDecl->size);
+        mapCapacities[mapDecl->name.value] = size;
+        size_t mapSize = mapDecl->keys->elements.size();
+        std::string name = mapDecl->name.value;
+
+        currentOffset -= 8;
+        emit(std::format("movq ${}, {}(%rbp)", mapSize, currentOffset));
+        symbolTable[name + "_count"] = currentOffset;
+        
+        int keyBaseOffset = currentOffset - 8;
+        for (int i = 0; i < size; i++) {
+            currentOffset -= 8;
+        }
+
+        int valueBaseOffset = currentOffset - 8;
+        for (int i = 0; i < size; i++) {
+            currentOffset -= 8;
+        }
+
+        symbolTable[name + "_keys"] = keyBaseOffset;
+        symbolTable[name + "_values"] = valueBaseOffset;
+
+        for (size_t i = 0; i < mapSize; i++) {
+            genNode(mapDecl->keys->elements[i]);
+            int offset = keyBaseOffset - i * 8;
+            emit(std::format("movq %rax, {}(%rbp)", offset));
+        }
+
+        for (size_t i = 0; i < mapSize; i++) {
+            genNode(mapDecl->values->elements[i]);
+            int offset = valueBaseOffset - i * 8;
+            emit(std::format("movq %rax, {}(%rbp)", offset));
+        }
+    }
+
     if (auto callNode = dynamic_cast<CallNode*>(node)) {
         for (int i = 0; i < callNode->arguments.size(); i++) {
             genNode(callNode->arguments[i]);
@@ -482,20 +638,43 @@ void CodeGen::genNode(ASTNode* node) {
     }
 
     if (auto printNode = dynamic_cast<PrintNode*>(node)) {
-        genNode(printNode->value);
-        emit("movq %rax, %rdx");
-        emit("leaq fmt(%rip), %rcx");
-        emit("subq $32, %rsp");
-        emit("call printf");
-        emit("addq $32, %rsp");
-    }
+        if (auto arr = dynamic_cast<ArrayDeclNode*>(printNode->value)) {
+            if (arr->isImmutable) {
+                std::string fullString = "";
+                for (auto element :arr->elements) {
+                    NumberLiteralNode* ascii = dynamic_cast<NumberLiteralNode*>(element);
+                    int asciiValue = std::stoi(ascii->value);
+                    fullString += static_cast<char>(asciiValue);
+                }
+                std::string strName = std::format("printStr{}", uniqueCount++);
+                emit(".data", false);
+                emit(std::format("{}: .string \"{}\"", strName, fullString), false);
+                emit(".text", false);
 
+                emit(std::format("leaq {}(%rip), %rdx", strName));
+                emit("leaq strFmt(%rip), %rcx");
+                emit("subq $32, %rsp");
+                emit("call printf");
+                emit("addq $32, %rsp");
+            }
+        } else {
+            genNode(printNode->value);
+            emit("movq %rax, %rdx");
+            emit("leaq fmt(%rip), %rcx");
+            emit("subq $32, %rsp");
+            emit("call printf");
+            emit("addq $32, %rsp");
+        }
+    }
 
 }
 
 std::string CodeGen::generate(ASTNode* root) {
     emit(".data", false);
     emit("fmt: .string \"%d\\n\"", false);
+    emit("strFmt: .string \"%s\\n\"", false);
+    emit("mapMissMsg: .string \"Error: key not found in map\\n\"", false);
+    emit("mapOverflowMsg: .string \"Error: map overflow\\n\"", false);
     emit(".text", false);
     emit(".global main", false);
     emit(".def main; .scl 2; .type 32; .endef", false);
@@ -509,6 +688,12 @@ std::string CodeGen::generate(ASTNode* root) {
     genNode(root);
     emit("leave");
     emit("ret");
+
+    emit("runtime_error:", false);
+    emit("subq $32, %rsp");
+    emit("call printf");
+    emit("movq $1, %rcx");
+    emit("call exit");
 
     return output;
 }

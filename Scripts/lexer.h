@@ -19,6 +19,7 @@ enum class TokenType {
     L_AND, L_OR, L_NOT, L_XOR, B_AND, B_OR, B_NOT, B_XOR,
     Punctuation,
     Array, Hash, Struct, Push, Remove,
+    Map,
     Int, Bool, Float, Null, UnsignedInt, UnsignedFloat, Str, Char, Sentinel,
     Unknown,
     EndOfFile
@@ -37,6 +38,7 @@ inline const std::unordered_map<std::string, TokenType> keywords = {
     {"insert", TokenType::Insert},
     {"from", TokenType::From},
     {"as", TokenType::As},
+    {"map", TokenType::Map},
     {"enum", TokenType::Enum},
     {"inline", TokenType::Inline},
     {"push", TokenType::Push},

@@ -77,6 +77,7 @@ struct VarDeclNode : ASTNode {
 
 struct ArrayDeclNode : VarDeclNode {
     Token elementType;
+    ArrayDeclNode* nestedType;
     int size;
     std::vector<ASTNode*> elements;
     bool isImmutable;
@@ -90,6 +91,18 @@ struct StructDeclNode : ASTNode {
     std::vector<Param> fields;
 
     StructDeclNode(Token name, std::vector<Param> fields) : name(name), fields(fields) {}
+};
+
+struct MapDeclNode : ASTNode {
+    ArrayDeclNode* keys;
+    ArrayDeclNode* values;
+    Token name;
+    Token keyType;
+    Token valueType;
+    ASTNode* size;
+
+    MapDeclNode(Token name, Token keyType, Token valueType, ASTNode* size, ArrayDeclNode* keys, ArrayDeclNode* values)
+    : name(name), keyType(keyType), valueType(valueType), size(size), keys(keys), values(values) {}
 };
 
 struct InstanceNode : ASTNode {
@@ -125,7 +138,8 @@ struct AssignNode : ASTNode {
 struct PushNode : ASTNode {
     Token arrayName;
     ASTNode* value;
-    PushNode(Token arrayName, ASTNode* value) : arrayName(arrayName), value(value) {}
+    ASTNode* secondValue;
+    PushNode(Token arrayName, ASTNode* value, ASTNode* secondValue) : arrayName(arrayName), value(value), secondValue(secondValue) {}
 };
 
 struct RemoveNode : ASTNode {
