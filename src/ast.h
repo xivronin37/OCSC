@@ -88,9 +88,10 @@ struct ArrayDeclNode : VarDeclNode {
 
 struct StructDeclNode : ASTNode {
     Token name;
+    std::unordered_map<std::string, ASTNode*> methods;
     std::vector<Param> fields;
 
-    StructDeclNode(Token name, std::vector<Param> fields) : name(name), fields(fields) {}
+    StructDeclNode(Token name, std::vector<Param> fields, std::unordered_map<std::string, ASTNode*> methods) : name(name), fields(fields), methods(methods) {}
 };
 
 struct MapDeclNode : ASTNode {
@@ -118,6 +119,15 @@ struct FieldAccessNode : ASTNode {
 
     FieldAccessNode(ASTNode* target, Token field) : target(target), field(field){}
 
+};
+
+struct MethodNode : ASTNode {
+    Token methodName;
+    Token targetName;
+    std::vector<ASTNode*> arguments;
+
+    MethodNode(Token methodName, Token targetName, std::vector<ASTNode*> arguments)
+        : methodName(methodName), targetName(targetName), arguments(arguments) {}
 };
 
 struct IndexNode : ASTNode {

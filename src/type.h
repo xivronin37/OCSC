@@ -17,6 +17,11 @@ struct MapInfo {
     bool isImmutable;
 };
 
+struct StructInfo {
+    std::vector<Param> fields;
+    std::unordered_map<std::string, ASTNode*> methods;
+};
+
 
 class SymbolTable  {
     private:
@@ -58,9 +63,11 @@ class TypeChecker {
     public:
         SymbolTable symbols;
         
-        std::unordered_map<std::string, std::vector<Param>> structTable;
+        std::unordered_map<std::string, StructInfo> structTable;
 
         std::unordered_map<std::string, std::string> instances;
+
+        TokenType TypeCheckMethod(FuncDeclNode* funcDecl, const std::string& structName);
         
         TypeChecker() = default;
         TokenType TypeCheck(ASTNode* node);

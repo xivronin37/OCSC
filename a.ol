@@ -1,3 +1,11 @@
-let x: {arr(3), i}, \1, 2, 3\;
+open class Player [
+    i: health;
 
-let y: i, x#0;
+    create i takeDamage(i: amount) [
+        inst.health ~ inst.health - amount;
+    ]
+]
+
+let p: Player, ?Player(100);
+call p.takeDamage(30);
+`(p.health);

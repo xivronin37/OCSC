@@ -15,11 +15,9 @@ int countVarDecl(ASTNode* node) {
     }
 
     if (auto varDecl = dynamic_cast<VarDeclNode*>(node)) {
-        if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
-            counter += countVarDecl(inst);
-        }
-        else {
-            counter++;
+       counter += countVarDecl(varDecl->value);
+        if (!dynamic_cast<InstanceNode*>(varDecl->value) && !dynamic_cast<IndexNode*>(varDecl->value)) {
+            counter++; 
         }
     }
 
@@ -58,12 +56,21 @@ int countVarDecl(ASTNode* node) {
             throw std::runtime_error("CG: E50-1 | Map size cannot be negative");
         }
 
+        for (auto key : mapDecl->keys->elements) {
+            counter += countVarDecl(key);
+        }
+
+        for (auto value : mapDecl->values->elements) {
+            counter += countVarDecl(value);
+        }
+
         counter += size * 2;
         counter++;
     }
     
     if (auto idx = dynamic_cast<IndexNode*>(node)) {
         counter += countVarDecl(idx->index);
+        counter += 2;
     }
     
     if (auto inst = dynamic_cast<InstanceNode*>(node)) {
@@ -78,12 +85,62 @@ int countVarDecl(ASTNode* node) {
         }
     }
 
+    if (auto printNode = dynamic_cast<PrintNode*>(node)) {
+        counter += 3;
+    }
+
     return counter;
 }
 
 void CodeGen::emit(const std::string& line, bool indent) {
     std::string current = (indent ? "\t" : "") + line + "\n";
     output += current;
+}
+
+void CodeGen::genMethod(FuncDeclNode* method, const std::string& structName) {
+    std::string name = structName + "_" + method->name.value;
+    emit(std::format("jmp .L_skip_{}", name));
+    emit(name + ":", false);
+    emit("pushq %rbp");
+    emit("movq %rsp, %rbp");
+
+    int allocatedBytes = (countVarDecl(method->body) + method->parameters.size() + 1) * 8;
+
+    emit(std::format("subq ${}, %rsp", allocatedBytes));
+    funcOffset -= 8;
+    symbolTable["inst"] = funcOffset;
+    emit(std::format("movq %rcx, {}(%rbp)", funcOffset));
+
+    for (int i = 1; i <= method->parameters.size(); i++) {
+        funcOffset-=8;
+        symbolTable[method->parameters[i-1].name.value] = funcOffset;
+        switch(i) {
+            default: {
+                throw std::runtime_error("CG: E66-1 | Cannot have more than three parameters: " + name);
+            }
+            case 1: {
+                emit(std::format("movq %rdx, {}(%rbp)", funcOffset));
+                break;
+            }
+            case 2: {
+                emit(std::format("movq %r8, {}(%rbp)", funcOffset));
+                break;
+            }
+            case 3: {
+                emit(std::format("movq %r9, {}(%rbp)", funcOffset));
+                break;
+            }
+            }
+        }
+
+
+    genNode(method->body);
+
+    funcOffset = 0;
+
+    emit("leave");
+    emit("ret");
+    emit(std::format(".L_skip_{}:", name), false);
 }
 
 void CodeGen::genNode(ASTNode* node) {
@@ -218,8 +275,11 @@ void CodeGen::genNode(ASTNode* node) {
     
     if (auto idx = dynamic_cast<IndexNode*>(node)) {
         if (typeCheck.symbols.mapExists(idx->name.value)) {
+            bool stringKeyed = false;
+            if (typeCheck.symbols.mapKeyType(idx->name.value) == TokenType::String) {
+                stringKeyed = true;
+            }
             genNode(idx->index);
-
             currentOffset -= 8;
             int keyOffset = currentOffset;
             emit(std::format("movq %rax, {}(%rbp)", keyOffset));
@@ -235,6 +295,7 @@ void CodeGen::genNode(ASTNode* node) {
             std::string startLabel = std::format("START{}", id);
             std::string endLabel = std::format("END{}", id);
             std::string foundLabel = std::format("FOUND{}", id);
+            std::string noMatchLabel = std::format("NOMATCH{}", id);
             std::string doneLabel = std::format("DONE{}", id);
 
             emit(startLabel + ":", false);
@@ -244,11 +305,39 @@ void CodeGen::genNode(ASTNode* node) {
             emit("cmpq %rdx, %rcx");
             emit(std::format("jge {}", endLabel));
 
-            emit("negq %rcx");
-            emit(std::format("movq {}(%rbp, %rcx, 8), %rax", keyBaseOffset)); // load index rcx to rax
-            emit("negq %rcx");
-            emit(std::format("cmpq {}(%rbp), %rax", keyOffset));
-            emit(std::format("je {}", foundLabel));
+            if (!stringKeyed) {
+                emit("negq %rcx");
+                emit(std::format("movq {}(%rbp, %rcx, 8), %rax", keyBaseOffset)); // load index rcx to rax
+                emit("negq %rcx");
+                emit(std::format("cmpq {}(%rbp), %rax", keyOffset));
+                emit(std::format("je {}", foundLabel));
+            } else {
+                emit("negq %rcx");
+                emit(std::format("movq {}(%rbp, %rcx, 8), %rax", keyBaseOffset)); // load index rcx to rax
+                emit("negq %rcx");
+                emit("movq %rax, %r8"); // save key to r8 for string check
+                emit(std::format("movq {}(%rbp), %r9", keyOffset)); // search key address
+                emit("movq 8(%r8), %rax");
+                emit("cmpq 8(%r9), %rax");
+                emit(std::format("jne {}", noMatchLabel));
+                emit("movq %rax, %r11"); // load length into r11
+                emit("movq $0, %r10"); // initialize string index at 0
+                int charId = uniqueCount++;
+                std::string charStart = std::format("CHAR_START{}", charId);
+                emit(charStart + ":", false);
+                emit("cmpq %r11, %r10");
+                emit(std::format("jge {}", foundLabel));
+                emit("negq %r10");
+                emit("movq (%r8, %r10, 8), %rax");
+                emit("movq (%r9, %r10, 8), %r13");
+                emit("negq %r10");
+                emit("cmpq %r13, %rax"); // compare characters
+                emit(std::format("jne {}", noMatchLabel));
+                emit("incq %r10");
+                emit(std::format("jmp {}", charStart));
+            }
+
+            emit(noMatchLabel + ":", false);
             emit("incq %rcx");
             emit(std::format("movq %rcx, {}(%rbp)", counterOffset));
             emit(std::format("jmp {}", startLabel));
@@ -280,7 +369,7 @@ void CodeGen::genNode(ASTNode* node) {
         }
 
         int baseOffset = symbolTable[target->value];
-        std::vector<Param> fields = typeCheck.structTable[typeCheck.instances[target->value]];
+        std::vector<Param> fields = typeCheck.structTable[typeCheck.instances[target->value]].fields;
 
         bool found = false;
         int count = -1;
@@ -297,9 +386,14 @@ void CodeGen::genNode(ASTNode* node) {
             throw std::runtime_error("CG: E35-1 | Undefined field: " + field->field.value);
         }
 
-        int finalOffset = baseOffset - count*8;
+        int finalOffset = -count*8;
 
-        emit(std::format("movq {}(%rbp), %rax", finalOffset));
+        if (target->value == "inst") {
+            emit(std::format("movq {}(%rbp), %r8", baseOffset));
+            emit(std::format("movq {}(%r8), %rax", finalOffset));
+        } else {
+            emit(std::format("movq {}(%rbp), %rax", baseOffset + finalOffset));
+        }
     }
 
     if (auto push = dynamic_cast<PushNode*>(node)) {
@@ -403,7 +497,7 @@ void CodeGen::genNode(ASTNode* node) {
         auto it = symbolTable.find(id->value);
 
         if (it == symbolTable.end()) {
-            throw std::runtime_error("Undefined variable: " + id->value);
+            throw std::runtime_error("CG: E58 | Undefined variable: " + id->value);
         }
 
         int offset = it->second;
@@ -434,7 +528,7 @@ void CodeGen::genNode(ASTNode* node) {
             }
 
             int baseOffset = symbolTable[target->value];
-            std::vector<Param> fields = typeCheck.structTable[typeCheck.instances[target->value]];
+            std::vector<Param> fields = typeCheck.structTable[typeCheck.instances[target->value]].fields;
 
             bool found = false;
             int count = -1;
@@ -451,9 +545,14 @@ void CodeGen::genNode(ASTNode* node) {
                 throw std::runtime_error("CG: E35-2 | Undefined field: " + target->value);
             }
 
-            int finalOffset = baseOffset - count*8;
+            int finalOffset = -count * 8;
 
-            emit(std::format("movq %rax, {}(%rbp)", finalOffset));
+            if (target->value == "inst") {
+                emit(std::format("movq {}(%rbp), %r8", baseOffset));
+                emit(std::format("movq %rax, {}(%r8)", finalOffset));
+            } else {
+                emit(std::format("movq %rax, {}(%rbp)", baseOffset + finalOffset));
+            }
         }
 
         else if (auto idx = dynamic_cast<IndexNode*>(assign->target)) {
@@ -533,7 +632,7 @@ void CodeGen::genNode(ASTNode* node) {
             symbolTable[funcDecl->parameters[i-1].name.value] = funcOffset;
             switch(i) {
                 default: {
-                    throw std::runtime_error("Cannot have more than four parameters: " + funcDecl->name.value);
+                    throw std::runtime_error("CG: E65-1 | Cannot have more than four parameters: " + funcDecl->name.value);
                 }
                 case 1: {
                     emit(std::format("movq %rcx, {}(%rbp)", funcOffset));
@@ -600,12 +699,51 @@ void CodeGen::genNode(ASTNode* node) {
         }
     }
 
+    if (auto structDecl = dynamic_cast<StructDeclNode*>(node)) {
+        for (auto& methodPair : structDecl->methods) {
+            if (auto method = dynamic_cast<FuncDeclNode*>(methodPair.second)) {
+                genMethod(method, structDecl->name.value);
+            }
+        }
+    }
+    
+    if (auto method = dynamic_cast<MethodNode*>(node)) {
+        int instOffset = symbolTable[method->targetName.value];
+        emit(std::format("leaq {}(%rbp), %rcx", instOffset));
+
+        for (int i = 0; i < method->arguments.size(); i++) {
+            genNode(method->arguments[i]);
+            switch(i + 1) {
+                default:
+                    throw std::runtime_error("CG: E66-2 | Cannot have more than three arguments: " + method->methodName.value);
+                case 1: {
+                    emit("movq %rax, %rdx");
+                    break;
+                }
+                case 2: {
+                    emit("movq %rax, %r8");
+                    break;
+                }
+                case 3: {
+                    emit("movq %rax, %r9");
+                    break;
+                }
+        }
+        
+        std::string structName = typeCheck.instances[method->targetName.value];
+        emit("subq $32, %rsp");
+        emit(std::format("call {}_{}", structName, method->methodName.value));
+        emit("addq $32, %rsp");
+    }
+
+    }
+
     if (auto callNode = dynamic_cast<CallNode*>(node)) {
         for (int i = 0; i < callNode->arguments.size(); i++) {
             genNode(callNode->arguments[i]);
             switch(i + 1) {
                 default:
-                    throw std::runtime_error("Cannot have more than six arguments: " + callNode->name.value);
+                    throw std::runtime_error("CG: E65-2 | Cannot have more than four arguments: " + callNode->name.value);
                 case 1: {
                     emit("movq %rax, %rcx");
                     break;
@@ -638,25 +776,45 @@ void CodeGen::genNode(ASTNode* node) {
     }
 
     if (auto printNode = dynamic_cast<PrintNode*>(node)) {
-        if (auto arr = dynamic_cast<ArrayDeclNode*>(printNode->value)) {
-            if (arr->isImmutable) {
-                std::string fullString = "";
-                for (auto element :arr->elements) {
-                    NumberLiteralNode* ascii = dynamic_cast<NumberLiteralNode*>(element);
-                    int asciiValue = std::stoi(ascii->value);
-                    fullString += static_cast<char>(asciiValue);
-                }
-                std::string strName = std::format("printStr{}", uniqueCount++);
-                emit(".data", false);
-                emit(std::format("{}: .string \"{}\"", strName, fullString), false);
-                emit(".text", false);
+        if (typeCheck.TypeCheck(printNode->value) == TokenType::String) {
+            genNode(printNode->value);
+            emit("movq %rax, %r8"); // base
+            currentOffset -= 8;
+            int baseSlot = currentOffset;
+            emit(std::format("movq %r8, {}(%rbp)", baseSlot));
 
-                emit(std::format("leaq {}(%rip), %rdx", strName));
-                emit("leaq strFmt(%rip), %rcx");
-                emit("subq $32, %rsp");
-                emit("call printf");
-                emit("addq $32, %rsp");
-            }
+            emit("movq 8(%r8), %r9"); // length
+            currentOffset -= 8;
+            int lengthSlot = currentOffset;
+            emit(std::format("movq %r9, {}(%rbp)", lengthSlot));
+
+            currentOffset -= 8;
+            int indexSlot = currentOffset;
+            emit(std::format("movq $0, {}(%rbp)", indexSlot));
+
+            int id = uniqueCount++;
+            std::string printStart= std::format("PRINT_START{}", id);
+            std::string printEnd = std::format("PRINT_END{}", id);
+
+            emit(printStart + ":", false);
+            emit(std::format("movq {}(%rbp), %r9", lengthSlot));
+            emit(std::format("movq {}(%rbp), %r10", indexSlot));
+            emit("cmpq %r9, %r10");
+            emit(std::format("jge {}", printEnd));
+
+            emit("negq %r10");
+            emit(std::format("movq {}(%rbp), %r8", baseSlot));
+            emit("movq (%r8, %r10, 8), %rdx");
+            emit("negq %r10");
+
+            emit("leaq charFmt(%rip), %rcx");
+            emit("subq $32, %rsp");
+            emit("call printf");
+            emit("addq $32, %rsp");
+
+            emit(std::format("addq $1, {}(%rbp)", indexSlot));
+            emit(std::format("jmp {}", printStart));
+            emit(printEnd + ":", false);
         } else {
             genNode(printNode->value);
             emit("movq %rax, %rdx");
@@ -672,6 +830,7 @@ void CodeGen::genNode(ASTNode* node) {
 std::string CodeGen::generate(ASTNode* root) {
     emit(".data", false);
     emit("fmt: .string \"%d\\n\"", false);
+    emit("charFmt: .string \"%c\"", false);
     emit("strFmt: .string \"%s\\n\"", false);
     emit("mapMissMsg: .string \"Error: key not found in map\\n\"", false);
     emit("mapOverflowMsg: .string \"Error: map overflow\\n\"", false);

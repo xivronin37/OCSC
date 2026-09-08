@@ -20,6 +20,7 @@ class CodeGen {
 
         void emit(const std::string& line, bool indent = true);
         void genNode(ASTNode* node);
+        void genMethod(FuncDeclNode* method, const std::string& structName);
     public:
         std::string generate(ASTNode* root);
         CodeGen(TypeChecker& checker) : typeCheck(checker) {}

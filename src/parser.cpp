@@ -22,6 +22,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Create: return "Create";
         case TokenType::Call: return "Call";
         case TokenType::Open: return "Open";
+        case TokenType::Inst: return "Inst";
         case TokenType::Class: return "Class";
         case TokenType::Insert: return "Insert";
         case TokenType::From: return "From";
@@ -111,7 +112,7 @@ Token Parser::expectType() {
     TokenType t = peek().type;
     if (t == TokenType::Int || t == TokenType::Bool || t == TokenType::Float || t == TokenType::Null
         || t == TokenType::UnsignedInt || t == TokenType::UnsignedFloat || t == TokenType::Identifier
-        || t == TokenType::String || t == TokenType::Character) {
+        || t == TokenType::String || t == TokenType::Character || t == TokenType::Str) {
         return advance();
     }
 
@@ -141,7 +142,7 @@ ASTNode* Parser::statement() {
         return whileStatement();
     }
 
-    if (peek().type == TokenType::Identifier) {
+    if (peek().type == TokenType::Identifier || peek().type == TokenType::Inst) {
         size_t savedPos = pos;
         ASTNode* target = primary();
         if (peek().type == TokenType::Equal || peek().type == TokenType::Tilde) {
@@ -193,18 +194,25 @@ ASTNode* Parser::varDecl() {
     else if (peek().type == TokenType::Str) {
         advance();
         expect(TokenType::Comma);
-        Token literal = expect(TokenType::String);
-        expect(TokenType::Semicolon);
-        std::vector<ASTNode*> elements;
+        if (peek().type == TokenType::String) {
+            Token literal = expect(TokenType::String);
+            expect(TokenType::Semicolon);
+            std::vector<ASTNode*> elements;
 
-        for (const char& c : literal.value) {
-            std::string ascii = std::to_string(static_cast<int>(c));
-            elements.push_back(new NumberLiteralNode(ascii));
+            for (const char& c : literal.value) {
+                std::string ascii = std::to_string(static_cast<int>(c));
+                elements.push_back(new NumberLiteralNode(ascii));
+            }
+
+            Token elementType{TokenType::Int, "i", name.line, name.column};
+
+            return new ArrayDeclNode{name, elementType, (int)elements.size(), elements, true}; // Strings are currently ArrayDecl for temporary optimization
+        } else {
+            Token type{TokenType::Str, "str", name.line, name.column};
+            ASTNode* value = expression(); 
+            expect(TokenType::Semicolon);
+            return new VarDeclNode{name, type, value};
         }
-
-        Token elementType{TokenType::Int, "i", name.line, name.column};
-
-        return new ArrayDeclNode{name, elementType, (int)elements.size(), elements, true}; // Strings are currently ArrayDecl for temporary optimization
     }
     else if (peek().type == TokenType::Char) {
         advance();
@@ -239,12 +247,16 @@ ASTNode* Parser::varDecl() {
 std::vector<ASTNode*> Parser::parseList(TokenType expectedType) {
     std::vector<ASTNode*> elements;
     expect(TokenType::BSlash);
+    if (expectedType == TokenType::Str) {
+        expectedType = TokenType::String;
+    }
 
     while (peek().type != TokenType::BSlash) {
+
         if (peek().type == expectedType) {
             elements.push_back(expression());
         } else {
-            throw std::runtime_error("P: E29 | Expected type: " + tokenTypeName(expectedType) + "Got: " +tokenTypeName(peek().type));
+            throw std::runtime_error("P: E29 | Expected type: " + tokenTypeName(expectedType) + " Got: " +tokenTypeName(peek().type));
         }
         if (peek().type == TokenType::Comma) advance();
     }
@@ -347,19 +359,27 @@ ASTNode* Parser::classDecl() {
     expect(TokenType::LBracket);
 
     std::vector<Param> fields;
+    std::unordered_map<std::string, ASTNode*> methods;
 
     while (peek().type != TokenType::RBracket) {
-        Param field;
-        field.type = expectType();
-        expect(TokenType::Colon);
-        field.name = expect(TokenType::Identifier);
-        fields.push_back(field);
-        expect(TokenType::Semicolon);
+       if (peek().type == TokenType::Create) {
+            ASTNode* method = funcDecl();
+            if (auto func = dynamic_cast<FuncDeclNode*>(method)) {
+                methods[func->name.value] = method;
+            }
+        } else {
+            Param field;
+            field.type = expectType();
+            expect(TokenType::Colon);
+            field.name = expect(TokenType::Identifier);
+            fields.push_back(field);
+            expect(TokenType::Semicolon);
+        }
     }
 
     expect(TokenType::RBracket);
 
-    return new StructDeclNode{name, fields};
+    return new StructDeclNode{name, fields, methods};
 }
 
 ASTNode* Parser::enumDecl() {
@@ -570,12 +590,7 @@ ASTNode* Parser::primary() {
 
         if (peek().type == TokenType::Dot) {
             // if instance access
-
-            advance();
-
-            Token field = advance();
-
-            return new FieldAccessNode{new IdentifierNode(id.value), field};
+            return parseDotAccess(id);
         }
 
         if (peek().type == TokenType::Character) {
@@ -615,10 +630,13 @@ ASTNode* Parser::primary() {
 
         expect(TokenType::Call);
         Token name = expect(TokenType::Identifier);
+
+        if (peek().type == TokenType::Dot) {
+            return parseDotAccess(name);
+        }
+
         expect(TokenType::LParen);
-
         std::vector<ASTNode*> arguments;
-
         while (peek().type != TokenType::RParen) {
             ASTNode* argument = expression();
             arguments.push_back(argument);
@@ -654,8 +672,32 @@ ASTNode* Parser::primary() {
         return new InstanceNode{structName, arguments};
     }
 
+    if (peek().type == TokenType::Inst) {
+        // accessing an instance method specifically
+        return parseDotAccess(advance());
+    }
 
     throw std::runtime_error("P: E27 | Expected expression at line " + std::to_string(peek().line));
+}
+
+ASTNode* Parser::parseDotAccess(Token targetName) {
+    expect(TokenType::Dot);
+    Token field = advance();
+
+    if (peek().type == TokenType::LParen) {
+        advance();
+        std::vector<ASTNode*> arguments;
+        while (peek().type != TokenType::RParen) {
+            arguments.push_back(expression());
+            if (peek().type != TokenType::RParen) {
+                expect(TokenType::Comma);
+            }
+        }
+        expect(TokenType::RParen);
+        return new MethodNode{field, targetName, arguments};
+    }
+
+    return new FieldAccessNode{new IdentifierNode(targetName.value), field};
 }
 
 ASTNode* Parser::block() {
@@ -686,9 +728,6 @@ ASTNode* Parser::parse() {
         Lexer lexer(insertSource);
         std::vector<Token> tokens = lexer.tokenize();
 
-        for (auto token : tokens) {
-            std::cout << "[insert] Type: " << tokenTypeName(token.type) << " Lexeme: " << token.value << std::endl;
-        }
 
         Parser parser(tokens, insertedPath.parent_path());
 
@@ -803,6 +842,13 @@ void printAST(ASTNode* node, int depth) {
         }
     }
 
+    else if (auto method = dynamic_cast<MethodNode*>(node)) {
+        std::cout << indent << "Method: " << method->targetName.value << "." << method->methodName.value << std::endl;
+        for (auto arg : method->arguments) {
+            printAST(arg, depth + 1);
+        }
+    }
+    
     else if (auto field = dynamic_cast<FieldAccessNode*>(node)) {
         std::cout << indent << "FieldAccess: ." << field->field.value << "\n";
         printAST(field->target, depth + 1);
@@ -827,3 +873,4 @@ void printAST(ASTNode* node, int depth) {
         std::cout << indent << "Unknown node\n";
     }
 }
+

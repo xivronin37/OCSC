@@ -27,11 +27,21 @@ TokenType SymbolTable::lookup(const std::string& name) const {
 }
 
 TokenType SymbolTable::mapKeyType(const std::string& name) const {
-    return maps.at(name).keyType;
+    TokenType key = maps.at(name).keyType;
+    if (key == TokenType::Str) {
+        return TokenType::String;
+    } else {
+        return key;
+    }
 }
 
 TokenType SymbolTable::mapValueType(const std::string& name) const {
-    return maps.at(name).valueType;
+    TokenType value = maps.at(name).valueType;
+    if (value == TokenType::Str) {
+        return TokenType::String;
+    } else {
+        return value;
+    }
 }
 
 bool SymbolTable::exists(const std::string& name) const {
@@ -74,6 +84,39 @@ bool TypeChecker::nameTaken(const std::string& name) {
     if (structTable.find(name) != structTable.end()) return true;
     if (functions.find(name) != functions.end()) return true;
     return symbols.isDeclared(name);
+}
+
+TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string& structName) {
+    std::string key = structName + "_" + funcDecl->name.value;
+    if (nameTaken(key)) {
+        throw std::runtime_error("TC: E19-2 | '" + key + "' is already declared");
+    }
+
+    FuncType current;
+    current.type = funcDecl->returnType.type;
+    for (auto param : funcDecl->parameters) {
+        current.paramTypes.push_back(param.type.type);
+    }
+
+    functions[key] = current;
+
+    for (auto param : funcDecl->parameters) {
+        symbols.declare(param.name.value, param.type.type);
+    }
+
+    returnType = current.type;
+
+    instances["inst"] = structName;
+
+    TypeCheck(funcDecl->body);
+
+    returnType = TokenType::Sentinel;
+
+    for (auto param : funcDecl->parameters) {
+        symbols.remove(param.name.value);
+    }
+
+    return current.type;
 }
 
 TokenType TypeChecker::TypeCheck(ASTNode* node) {
@@ -128,6 +171,10 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         symbols.arrayDeclare(arr->name.value, declaredType, arr->isImmutable);
 
+        if (arr->isImmutable) {
+            return TokenType::String;
+        }
+
         return declaredType;
     }
 
@@ -160,6 +207,10 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         }
 
         TokenType value = TypeCheck(varDecl->value);
+        TokenType declaredType = varDecl->type.type;
+        if (declaredType == TokenType::Str) {
+            declaredType = TokenType::String;
+        }
 
         if (varDecl->type.type == TokenType::Identifier) {
             // declared type is a struct name
@@ -173,14 +224,14 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             }
 
             instances[varDecl->name.value] = varDecl->type.value;
+
         } else {
-            TokenType declaredType = varDecl->type.type;
             if (value != declaredType) {
                 throw std::runtime_error("TC: E13 | Type mismatch in variable declaration for '" + varDecl->name.value + "'");
             }
         }
 
-        symbols.declare(varDecl->name.value, varDecl->type.type);
+        symbols.declare(varDecl->name.value, declaredType);
 
         return varDecl->type.type;
     }
@@ -189,7 +240,21 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         if (nameTaken(structDecl->name.value)) {
             throw std::runtime_error("TC: E14 | '" + structDecl->name.value +  "' is already declared");
         }
-        structTable[structDecl->name.value] = structDecl->fields;
+
+        StructInfo info;
+        info.fields = structDecl->fields;
+        structTable[structDecl->name.value] = info;
+        
+        for (auto method : structDecl->methods) {
+            if (auto func = dynamic_cast<FuncDeclNode*>(method.second)) {
+                TypeCheckMethod(func, structDecl->name.value);
+            } else {
+                throw std::runtime_error("TC: E15 | Invalid method declaration for struct '" + structDecl->name.value + "'");
+            }
+
+            info.methods[method.first] = method.second;
+        }
+
 
         return TokenType::Sentinel;
     }
@@ -207,12 +272,12 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         std::string currentInstance = instances[target->value];
 
-        auto& fields = structTable[currentInstance];
+        auto& structFields = structTable[currentInstance];
 
         bool found = false;
         TokenType fieldType = TokenType::Sentinel;
 
-        for (auto& checkedField : fields) {
+        for (auto& checkedField : structFields.fields) {
             if (checkedField.name.value == field->field.value ) {
                 found = true;
                 fieldType = checkedField.type.type;
@@ -221,11 +286,42 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         }
 
         if (!found) {
-            throw std::runtime_error("TC: E33 | No such field");
+            throw std::runtime_error("TC: E33 | No such field: '" + field->field.value + "'");
         }
 
         return fieldType;
+    }
 
+    if (auto method = dynamic_cast<MethodNode*>(node)) {
+        if (instances.find(method->targetName.value) == instances.end()) {
+            throw std::runtime_error("TC: E61 | No instance found for method call: '" + method->methodName.value + "'");
+        }
+
+        std::string structName = instances[method->targetName.value];
+        std::string key = structName + "_" + method->methodName.value;
+
+        auto it = functions.find(key);
+        if (it == functions.end()) {
+            throw std::runtime_error("TC: E62 | Undefined method: '" + method->methodName.value + "'");
+        }
+
+        FuncType typeStruct = it->second;
+
+        if (method->arguments.size() != typeStruct.paramTypes.size()) {
+            throw std::runtime_error("TC: E63 | Expected " + std::to_string(typeStruct.paramTypes.size()) + " arguments, got " + std::to_string(method->arguments.size()));
+        }
+
+        int index = 0;
+
+        for (auto& arg : method->arguments){
+            TokenType argType = TypeCheck(arg);
+            if (argType != typeStruct.paramTypes[index]) {
+                throw std::runtime_error("TC: E64 | Expected type: " + tokenTypeName(typeStruct.paramTypes[index]) + ", got: " + tokenTypeName(argType));
+            }
+            index++;
+        }
+
+        return typeStruct.type;
     }
 
     if (auto inst = dynamic_cast<InstanceNode*>(node)) {
@@ -233,18 +329,18 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             throw std::runtime_error("TC: E24 | Unknown struct: '" + inst->structName.value + "'");
         }
 
-        auto& fields = structTable[inst->structName.value];
+        auto& structFields = structTable[inst->structName.value];
 
-        if (inst->arguments.size() != fields.size()) {
+        if (inst->arguments.size() != structFields.fields.size()) {
             throw std::runtime_error("TC: E25 | Struct '" + inst->structName.value + "' expected: " + 
-                std::to_string(fields.size()) + " Got: " + std::to_string(inst->arguments.size()));
+                std::to_string(structFields.fields.size()) + " Got: " + std::to_string(inst->arguments.size()));
         }
 
         for (size_t i = 0; i < inst->arguments.size(); i++) {
             TokenType argType = TypeCheck(inst->arguments[i]);
 
-            if (argType != fields[i].type.type) {
-                throw std::runtime_error("TC: E26 | Field: " + fields[i].name.value + " Expected: " + tokenTypeName(fields[i].type.type) + " Got: " + tokenTypeName(argType));
+            if (argType != structFields.fields[i].type.type) {
+                throw std::runtime_error("TC: E26 | Field: " + structFields.fields[i].name.value + " Expected: " + tokenTypeName(structFields.fields[i].type.type) + " Got: " + tokenTypeName(argType));
             }
         }
         
@@ -301,7 +397,7 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
     if (auto funcDecl = dynamic_cast<FuncDeclNode*>(node)) {
         if (nameTaken(funcDecl->name.value)) {
-            throw std::runtime_error("TC: E19 | '" + funcDecl->name.value + "' is already declared");
+            throw std::runtime_error("TC: E19-1 | '" + funcDecl->name.value + "' is already declared");
         }
 
         FuncType current;
@@ -327,13 +423,12 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         }
 
         return current.type;
-
     }
 
     if (auto mapDecl = dynamic_cast<MapDeclNode*>(node)) {
         if (mapDecl->keyType.type == TokenType::Int || mapDecl->keyType.type == TokenType::Bool
             || mapDecl->keyType.type == TokenType::Float || mapDecl->keyType.type == TokenType::String 
-            || mapDecl->keyType.type == TokenType::Character) {
+            || mapDecl->keyType.type == TokenType::Character || mapDecl->keyType.type == TokenType::Str) {
 
         } else {
             throw std::runtime_error("TC: E46-1 | Invalid key type");
@@ -341,7 +436,8 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         if (mapDecl->valueType.type == TokenType::Int || mapDecl->valueType.type == TokenType::Bool
             || mapDecl->valueType.type == TokenType::Float || mapDecl->valueType.type == TokenType::String 
-            || mapDecl->valueType.type == TokenType::Character || mapDecl->valueType.type == TokenType::Struct) {
+            || mapDecl->valueType.type == TokenType::Character || mapDecl->valueType.type == TokenType::Struct
+            || mapDecl->valueType.type == TokenType::Str) {
 
         } else {
             throw std::runtime_error("TC: E46-2 | Invalid value type");
@@ -466,11 +562,11 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
     if (auto printValue = dynamic_cast<PrintNode*>(node)) {
         TokenType printType = TypeCheck(printValue->value);
 
-        if (printType == TokenType::Int) {
+        if (printType == TokenType::Int || printType == TokenType::String) {
             return printType;
         }
         else {
-            throw std::runtime_error("TC: E41 | Expected int type, got: " + tokenTypeName(printType));
+            throw std::runtime_error("TC: E41 | Expected printable type, got: " + tokenTypeName(printType));
         }
     }
 
