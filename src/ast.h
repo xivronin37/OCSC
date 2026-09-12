@@ -13,6 +13,7 @@ struct ASTNode {
 struct Param {
     Token type;
     Token name;
+    bool isReference;
 };
 
 struct IdentifierNode : ASTNode {
@@ -179,4 +180,9 @@ struct CallNode : ASTNode {
     std::vector<ASTNode*> arguments;
     
     CallNode(Token name, std::vector<ASTNode*> arguments) : name(name), arguments(arguments) {}
+};
+
+struct SizeNode : ASTNode {
+    Token name;
+    SizeNode(Token name) : name(name) {}
 };

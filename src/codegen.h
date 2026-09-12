@@ -12,6 +12,7 @@ class CodeGen {
         std::string output;
         std::unordered_map<std::string, int> symbolTable;
         std::unordered_map<std::string, int> mapCapacities;
+        std::unordered_map<std::string, bool> isReferenceSlot;
         int currentOffset = 0;
         int funcOffset = 0;
         int ifCounter = 0;

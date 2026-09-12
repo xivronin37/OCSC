@@ -9,17 +9,38 @@
 #include "winpath.h"
 
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
         std::filesystem::path filePath = "C:/Projects/O Compiler/a.ol";
         std::string source = readFile(filePath.string());
+
+        bool showTokens = false;
+        bool showAst = false;
+        for (int i = 1; i < argc; i++) {
+            std::string arg = argv[i];
+            if (arg == "-d" && i + 1 < argc) {
+                std::string next = argv[i + 1];
+                if (next == "tokens") showTokens = true;
+                if (next == "ast") showAst = true;
+            }
+        }
+
         
         Lexer lexer(source);
         std::vector<Token> tokens = lexer.tokenize();
 
+        if (showTokens) {
+            for (const auto& token : tokens) {
+                std::cout << "Type: " << tokenTypeName(token.type) << " | Lexeme: \"" << token.value << "\" | Line: " << token.line << std::endl;
+            }
+        }
+
         Parser parser(tokens, filePath.parent_path());
 
         ASTNode* root = parser.parse();
+        if (showAst) {
+            printAST(root);
+        }
         
         TypeChecker checker;
         
@@ -67,20 +88,14 @@ int main() {
         while (true) {
             std::cout << "> " << std::flush;
             std::getline(std::cin, prompt);
-            
-            if (prompt == "-o ast") {
-                printAST(root);
-            }
-            else if (prompt == "-o tokens") {
-                for (auto token : tokens) {
-                    std::cout << "Type: " << tokenTypeName(token.type) << " | Lexeme: " << token.value << " | Line:" << token.line << std::endl;
-                }
-            }
-            else if (prompt == "-o assembly") {
+
+            if (prompt == "-d assembly") {
                 std::cout << assembly << std::endl;
             }
             else if (prompt == "-o exit") {
                 break;
+            } else {
+                std::cout << "Unknown command: " << prompt << std::endl;
             }
         }
 }

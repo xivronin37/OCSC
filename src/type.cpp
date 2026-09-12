@@ -2,6 +2,7 @@
 #include "ast.h"
 #include "type.h"
 #include <stdexcept>
+#include <algorithm>
 
 
 void SymbolTable::declare(const std::string& name, TokenType& type) {
@@ -80,6 +81,14 @@ void SymbolTable::remove(const std::string& name) {
     table.erase(name);
 }
 
+void SymbolTable::arrayRemove(const std::string& name) {
+    arrays.erase(name);
+}
+
+void SymbolTable::mapRemove(const std::string& name) {
+    maps.erase(name);
+}
+
 bool TypeChecker::nameTaken(const std::string& name) {
     if (structTable.find(name) != structTable.end()) return true;
     if (functions.find(name) != functions.end()) return true;
@@ -94,8 +103,18 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
 
     FuncType current;
     current.type = funcDecl->returnType.type;
+    if (current.type == TokenType::Char) {
+        current.type = TokenType::Int;
+    }
+
     for (auto param : funcDecl->parameters) {
-        current.paramTypes.push_back(param.type.type);
+        TokenType paramType = param.type.type;
+        if (paramType == TokenType::Char) {
+            paramType = TokenType::Int;
+        }
+
+        current.paramTypes.push_back(paramType);
+        current.isReference.push_back(param.isReference);
     }
 
     functions[key] = current;
@@ -108,6 +127,11 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
 
     instances["inst"] = structName;
 
+    std::vector<std::string> scalarKeysBefore, arrayKeysBefore, mapKeysBefore;
+    for (auto& [k, v] : symbols.table) scalarKeysBefore.push_back(k);
+    for (auto& [k, v] : symbols.arrays) arrayKeysBefore.push_back(k);
+    for (auto& [k, v] : symbols.maps) mapKeysBefore.push_back(k);
+
     TypeCheck(funcDecl->body);
 
     returnType = TokenType::Sentinel;
@@ -115,6 +139,25 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
     for (auto param : funcDecl->parameters) {
         symbols.remove(param.name.value);
     }
+    std::vector<std::string> toRemoveScalars, toRemoveArrays, toRemoveMaps;
+    for (auto& [k, v] : symbols.table) {
+        if (std::find(scalarKeysBefore.begin(), scalarKeysBefore.end(), k) == scalarKeysBefore.end()) {
+            toRemoveScalars.push_back(k);
+        }
+    }
+    for (auto& [k, v] : symbols.arrays) {
+        if (std::find(arrayKeysBefore.begin(), arrayKeysBefore.end(), k) == arrayKeysBefore.end()) {
+            toRemoveArrays.push_back(k);
+        }
+    }
+    for (auto& [k, v] : symbols.maps) {
+        if (std::find(mapKeysBefore.begin(), mapKeysBefore.end(), k) == mapKeysBefore.end()) {
+            toRemoveMaps.push_back(k);
+        }
+    }
+    for (auto& k : toRemoveScalars) symbols.remove(k);
+    for (auto& k : toRemoveArrays) symbols.arrayRemove(k);
+    for (auto& k : toRemoveMaps) symbols.mapRemove(k);
 
     return current.type;
 }
@@ -211,6 +254,9 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         if (declaredType == TokenType::Str) {
             declaredType = TokenType::String;
         }
+        if (declaredType == TokenType::Char) {
+            declaredType = TokenType::Int;
+        }
 
         if (varDecl->type.type == TokenType::Identifier) {
             // declared type is a struct name
@@ -229,9 +275,15 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             if (value != declaredType) {
                 throw std::runtime_error("TC: E13 | Type mismatch in variable declaration for '" + varDecl->name.value + "'");
             }
-        }
 
-        symbols.declare(varDecl->name.value, declaredType);
+            if (declaredType == TokenType::String) {
+                TokenType elementType = TokenType::Int;
+                symbols.arrayDeclare(varDecl->name.value, elementType, true);
+            } else {
+                symbols.declare(varDecl->name.value, declaredType);
+            }
+        }
+        
 
         return varDecl->type.type;
     }
@@ -281,6 +333,9 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             if (checkedField.name.value == field->field.value ) {
                 found = true;
                 fieldType = checkedField.type.type;
+                if (fieldType == TokenType::Str) {
+                    fieldType = TokenType::String;
+                }
                 break;
             }
         }
@@ -338,8 +393,12 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         for (size_t i = 0; i < inst->arguments.size(); i++) {
             TokenType argType = TypeCheck(inst->arguments[i]);
+            TokenType expectedType = structFields.fields[i].type.type;
+            if (expectedType == TokenType::Str) {
+                expectedType = TokenType::String;
+            }
 
-            if (argType != structFields.fields[i].type.type) {
+            if (argType != expectedType) {
                 throw std::runtime_error("TC: E26 | Field: " + structFields.fields[i].name.value + " Expected: " + tokenTypeName(structFields.fields[i].type.type) + " Got: " + tokenTypeName(argType));
             }
         }
@@ -404,6 +463,7 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         current.type = funcDecl->returnType.type;
         for (auto param : funcDecl->parameters) {
             current.paramTypes.push_back(param.type.type);
+            current.isReference.push_back(param.isReference);
         }
 
         functions[funcDecl->name.value] = current;
@@ -526,6 +586,16 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         return TokenType::Sentinel;
     }
 
+    if (auto size = dynamic_cast<SizeNode*>(node)) {
+        if (!(symbols.arrayExists(size->name.value))) {
+            if (!(symbols.mapExists(size->name.value))) {
+                throw std::runtime_error("TC: E68 | Invalid object for size operation: '" + size->name.value + "'");
+            }
+        }
+
+        return TokenType::Int;
+    }
+
     if (auto callNode = dynamic_cast<CallNode*>(node)) {
         auto it = functions.find(callNode->name.value);
         if (it == functions.end()) {
@@ -544,6 +614,12 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             if (type != typeStruct.paramTypes[index]) {
                 throw std::runtime_error("TC: E22 | Expected type: " + tokenTypeName(typeStruct.paramTypes[index]) + "Got: " + tokenTypeName(type));
             }
+            if (typeStruct.isReference[index]) {
+                if (!dynamic_cast<IdentifierNode*>(argument)) {
+                    throw std::runtime_error("TC: E67 | Unexpected reference type for argument at index " + std::to_string(index));
+                }
+            }
+
             index++;
         }
         return typeStruct.type;

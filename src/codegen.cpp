@@ -114,6 +114,8 @@ void CodeGen::genMethod(FuncDeclNode* method, const std::string& structName) {
     for (int i = 1; i <= method->parameters.size(); i++) {
         funcOffset-=8;
         symbolTable[method->parameters[i-1].name.value] = funcOffset;
+        isReferenceSlot[method->parameters[i-1].name.value] = method->parameters[i-1].isReference;
+
         switch(i) {
             default: {
                 throw std::runtime_error("CG: E66-1 | Cannot have more than three parameters: " + name);
@@ -133,10 +135,13 @@ void CodeGen::genMethod(FuncDeclNode* method, const std::string& structName) {
             }
         }
 
+    int savedOffset = currentOffset;
+    currentOffset = funcOffset;
 
     genNode(method->body);
 
     funcOffset = 0;
+    currentOffset = savedOffset;
 
     emit("leave");
     emit("ret");
@@ -254,15 +259,18 @@ void CodeGen::genNode(ASTNode* node) {
         std::string name = varDecl->name.value;
 
         if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
-            int baseOffset = currentOffset - 8;
+            bool first = true;
+            int baseOffset = 0;
 
             for (size_t i = 0; i < inst->arguments.size(); i++) {
                 genNode(inst->arguments[i]);
-
                 currentOffset -= 8;
+                if (first) {
+                    baseOffset = currentOffset;
+                    first = false;
+                }
                 emit(std::format("movq %rax, {}(%rbp)", currentOffset));
             }
-
             symbolTable[name] = baseOffset;
         }
         else {
@@ -270,6 +278,10 @@ void CodeGen::genNode(ASTNode* node) {
             currentOffset -= 8;
             symbolTable[name] = currentOffset;
             emit(std::format("movq %rax, {}(%rbp)", currentOffset));
+
+            if (varDecl->type.type == TokenType::Str) {
+                isReferenceSlot[name] = true;
+            }
         }
     }
     
@@ -357,7 +369,12 @@ void CodeGen::genNode(ASTNode* node) {
             genNode(idx->index);
             emit("negq %rax");
             int baseOffset = symbolTable[idx->name.value];
-            emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
+            if (isReferenceSlot[idx->name.value]){
+                emit(std::format("movq {}(%rbp), %rdx", baseOffset));
+                emit("movq (%rdx, %rax, 8), %rax");
+            } else {
+                emit(std::format("movq {}(%rbp, %rax, 8), %rax", baseOffset));
+            }
         }
     }
 
@@ -501,8 +518,12 @@ void CodeGen::genNode(ASTNode* node) {
         }
 
         int offset = it->second;
-
-        emit(std::format("movq {}(%rbp), %rax", offset));
+        if (isReferenceSlot[id->value]){
+            emit(std::format("movq {}(%rbp), %rax", offset));
+            emit("movq (%rax), %rax");
+        } else {
+            emit(std::format("movq {}(%rbp), %rax", offset));
+        }
     }
 
     if (auto assign = dynamic_cast<AssignNode*>(node)) {
@@ -515,7 +536,12 @@ void CodeGen::genNode(ASTNode* node) {
                 throw std::runtime_error("CG: E37 | Cannot assign to an undefined variable: " + id->value);
             }
 
-            emit(std::format("movq %rax, {}(%rbp)", it->second));
+            if (isReferenceSlot[id->value]){
+                emit(std::format("movq {}(%rbp), %r8", it->second));
+                emit("movq %rax, (%r8)");
+            } else {
+                emit(std::format("movq %rax, {}(%rbp)", it->second));
+            }
         }
 
         else if (auto field = dynamic_cast<FieldAccessNode*>(assign->target)) {
@@ -630,6 +656,7 @@ void CodeGen::genNode(ASTNode* node) {
         for (int i = 1; i <= funcDecl->parameters.size(); i++) {
             funcOffset-=8;
             symbolTable[funcDecl->parameters[i-1].name.value] = funcOffset;
+            isReferenceSlot[funcDecl->parameters[i-1].name.value] = funcDecl->parameters[i-1].isReference;
             switch(i) {
                 default: {
                     throw std::runtime_error("CG: E65-1 | Cannot have more than four parameters: " + funcDecl->name.value);
@@ -653,10 +680,13 @@ void CodeGen::genNode(ASTNode* node) {
                 }
             }
 
+        int savedOffset = currentOffset;
+        currentOffset = funcOffset;
 
         genNode(funcDecl->body);
 
         funcOffset = 0;
+        currentOffset = savedOffset;
 
         emit("leave");
         emit("ret");
@@ -728,6 +758,7 @@ void CodeGen::genNode(ASTNode* node) {
                     emit("movq %rax, %r9");
                     break;
                 }
+            }
         }
         
         std::string structName = typeCheck.instances[method->targetName.value];
@@ -736,11 +767,15 @@ void CodeGen::genNode(ASTNode* node) {
         emit("addq $32, %rsp");
     }
 
-    }
-
     if (auto callNode = dynamic_cast<CallNode*>(node)) {
         for (int i = 0; i < callNode->arguments.size(); i++) {
-            genNode(callNode->arguments[i]);
+            if (functions[callNode->name.value].isReference[i]) {
+                auto id = dynamic_cast<IdentifierNode*>(callNode->arguments[i]);
+                int offset = symbolTable[id->value];
+                emit(std::format("leaq {}(%rbp), %rax", offset));
+            } else {
+                genNode(callNode->arguments[i]);
+            }
             switch(i + 1) {
                 default:
                     throw std::runtime_error("CG: E65-2 | Cannot have more than four arguments: " + callNode->name.value);
@@ -773,6 +808,21 @@ void CodeGen::genNode(ASTNode* node) {
 
         emit("leave");
         emit("ret");
+    }
+
+    if (auto size = dynamic_cast<SizeNode*>(node)) {
+        if (typeCheck.symbols.mapExists(size->name.value)) {
+            int lengthSlot = symbolTable[size->name.value + "_count"];
+            emit(std::format("movq {}(%rbp), %rax", lengthSlot));
+        } else {
+            int offset = symbolTable[size->name.value];
+            if (isReferenceSlot[size->name.value]) {
+                emit(std::format("movq {}(%rbp), %rax", offset));
+                emit("movq 8(%rax), %rax");
+            } else {
+                emit(std::format("movq {}(%rbp), %rax", offset + 8));
+            }
+        }
     }
 
     if (auto printNode = dynamic_cast<PrintNode*>(node)) {

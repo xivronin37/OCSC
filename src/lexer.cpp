@@ -29,6 +29,18 @@ void Lexer::skipWhitespace() {
     }
 }
 
+char Lexer::resolveEscape() {
+    char code = advance(); // the character right after $$
+
+    switch (code) {
+        case 'n': return '\n';
+        case 't': return '\t';
+        case '0': return '\0';
+        default:
+            throw std::runtime_error(std::format("L: E70 | Unknown escape sequence $${} at line {}, column {}", code, line, column));
+    }
+}
+
 Token Lexer::nextToken() {
     if (pos >= source.size()) {
         return {TokenType::EndOfFile, "EndOfFile", line, column};
@@ -75,10 +87,17 @@ Token Lexer::nextToken() {
         advance(); // eat opening quote
 
         while (peek() != '"' && peek() != '\0') {
-            StringLiteral += advance();
+              
+            if (peek() == '$' && pos + 1 < source.size() && source[pos + 1] == '$') {
+                advance(); // eat first $
+                advance(); // eat second $
+                StringLiteral += resolveEscape();
+            } else {
+                StringLiteral += advance();
+            }
 
             if (peek() == '\0') {
-                throw std::runtime_error(std::format("Unterminated string literal at line {}, column {}", line, column));
+                throw std::runtime_error(std::format("L: E69 | Unterminated string literal at line {}, column {}", line, column));
             }
         }
 
@@ -92,7 +111,12 @@ Token Lexer::nextToken() {
 
         advance(); // eat opening quote
         
-        if (peek() != '\'') {
+        if (peek() == '$' && pos + 1 < source.size() && source[pos + 1] == '$') {
+            advance(); // eat first $
+            advance(); // eat second $
+            CharLiteral += resolveEscape();
+        }
+        else if (peek() != '\'') {
             CharLiteral += advance();
         }
 
@@ -123,6 +147,7 @@ Token Lexer::nextToken() {
         case('?'): return {TokenType::Question, "?", line, column};
         case('.'): return {TokenType::Dot, ".", line, column};
         case('`'): return {TokenType::Backtick, "`", line, column};
+        case('@'): return {TokenType::At, "@", line, column};
         case('='): {
             if (peek() == '=') {
                 advance();
@@ -195,7 +220,7 @@ Lexer::Lexer(const std::string& source) : source(source), pos(0), line(1), colum
 std::string readFile(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + filename);
+        throw std::runtime_error("L: E71 | Could not open file: " + filename);
     }
 
     std::stringstream buffer;

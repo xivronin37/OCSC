@@ -15,7 +15,7 @@ enum class TokenType {
     String,
     Character,
     Plus, Minus, Star, FSlash, BSlash, Colon, Semicolon, Comma, LBracket, RBracket, LParen, RParen, LBrace, RBrace, Tilde,
-    Equal, EqualEqual, NotEqual, LessThan, GreaterThan, LessThanOrEqual, GreaterThanOrEqual, Question, Dot, Backtick,
+    Equal, EqualEqual, NotEqual, LessThan, GreaterThan, LessThanOrEqual, GreaterThanOrEqual, Question, Dot, Backtick, At,
     L_AND, L_OR, L_NOT, L_XOR, B_AND, B_OR, B_NOT, B_XOR,
     Punctuation,
     Array, Hash, Struct, Push, Remove, Inst,
@@ -81,6 +81,7 @@ class Lexer {
 
         char peek() const;
         char advance();
+        char resolveEscape();
         void skipWhitespace();
         Token nextToken();
 };

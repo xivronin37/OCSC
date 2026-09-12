@@ -55,6 +55,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Tilde: return "Tilde";
         case TokenType::Dot: return "Dot";
         case TokenType::Backtick: return "Backtick";
+        case TokenType::At: return "At";
         case TokenType::Equal: return "Equal";
         case TokenType::EqualEqual: return "EqualEqual";
         case TokenType::NotEqual: return "NotEqual";
@@ -73,10 +74,13 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Array: return "Array";
         case TokenType::Hash: return "Hash";
         case TokenType::Question: return "Question";
+        case TokenType::Character: return "Character";
+        case TokenType::Char: return "Char";
         case TokenType::Null: return "Null";
         case TokenType::UnsignedInt: return "UnsignedInt";
         case TokenType::UnsignedFloat: return "UnsignedFloat";
         case TokenType::EndOfFile: return "EndOfFile";
+        case TokenType::Sentinel: return "Sentinel";
     }
 
     return "Unknown"; 
@@ -112,7 +116,7 @@ Token Parser::expectType() {
     TokenType t = peek().type;
     if (t == TokenType::Int || t == TokenType::Bool || t == TokenType::Float || t == TokenType::Null
         || t == TokenType::UnsignedInt || t == TokenType::UnsignedFloat || t == TokenType::Identifier
-        || t == TokenType::String || t == TokenType::Character || t == TokenType::Str) {
+        || t == TokenType::String || t == TokenType::Char || t == TokenType::Str) {
         return advance();
     }
 
@@ -217,21 +221,28 @@ ASTNode* Parser::varDecl() {
     else if (peek().type == TokenType::Char) {
         advance();
         expect(TokenType::Comma);
-        int savedPos = peek().line;
-        Token literal = expect(TokenType::Character);
-        if (literal.value == "") {
-            throw std::runtime_error("P: E42-1 | Cannot parse an empty character at line " + std::to_string(savedPos));
+        if (peek().type == TokenType::Character) {
+            int savedPos = peek().line;
+            Token literal = expect(TokenType::Character);
+            if (literal.value == "") {
+                throw std::runtime_error("P: E42-1 | Cannot parse an empty character at line " + std::to_string(savedPos));
+            }
+
+            expect(TokenType::Semicolon);
+
+            std::vector<ASTNode*> elements;
+            std::string ascii = std::to_string(static_cast<int>(literal.value[0]));
+            elements.push_back(new NumberLiteralNode(ascii));
+
+            Token elementType{TokenType::Int, "i", name.line, name.column};
+
+            return new ArrayDeclNode{name, elementType, 1, elements, true};
+        } else {
+            Token type{TokenType::Char, "c", name.line, name.column};
+            ASTNode* value = expression();
+            expect(TokenType::Semicolon);
+            return new VarDeclNode{name, type, value};
         }
-
-        expect(TokenType::Semicolon);
-
-        std::vector<ASTNode*> elements;
-        std::string ascii = std::to_string(static_cast<int>(literal.value[0]));
-        elements.push_back(new NumberLiteralNode(ascii));
-
-        Token elementType{TokenType::Int, "i", name.line, name.column};
-
-        return new ArrayDeclNode{name, elementType, 1, elements, true};
     }
     else if (peek().type == TokenType::Map) {
         return mapDecl(name);
@@ -263,6 +274,18 @@ std::vector<ASTNode*> Parser::parseList(TokenType expectedType) {
 
     expect(TokenType::BSlash);
     return elements;
+}
+
+Param Parser::parseParam() {
+    Param p;
+    p.type = expectType();
+    if (peek().type == TokenType::At) {
+        advance();
+        p.isReference = true;
+    }
+    expect(TokenType::Colon);
+    p.name = expect(TokenType::Identifier);
+    return p;
 }
 
 typeBlockInfo Parser::typeBlock() {
@@ -323,11 +346,8 @@ ASTNode* Parser::funcDecl() {
     expect(TokenType::LParen);
 
     while (peek().type != TokenType::RParen) {
-        Param tempParam;
-        tempParam.type = expectType();
-        expect(TokenType::Colon);
-        tempParam.name = expect(TokenType::Identifier);
-        parameters.push_back(tempParam);
+        Param p = parseParam();
+        parameters.push_back(p);
         if (peek().type != TokenType::RParen) {
             expect(TokenType::Comma);
         }       
@@ -368,11 +388,8 @@ ASTNode* Parser::classDecl() {
                 methods[func->name.value] = method;
             }
         } else {
-            Param field;
-            field.type = expectType();
-            expect(TokenType::Colon);
-            field.name = expect(TokenType::Identifier);
-            fields.push_back(field);
+            Param p = parseParam();
+            fields.push_back(p);
             expect(TokenType::Semicolon);
         }
     }
@@ -677,6 +694,26 @@ ASTNode* Parser::primary() {
         return parseDotAccess(advance());
     }
 
+    if (peek().type == TokenType::Hash) {
+        advance();
+        expect(TokenType::LBrace);
+        Token name = expect(TokenType::Identifier);
+        expect(TokenType::RBrace);
+        return new SizeNode{name};
+    }
+
+    if (peek().type == TokenType::Character) {
+        int savedPos = peek().line;
+        Token literal = advance();
+        if (literal.value == "") {
+            throw std::runtime_error("P: E42-3 | Cannot parse an empty character at line: " + std::to_string(savedPos));
+        }
+
+        std::string ascii = std::to_string(static_cast<int>(literal.value[0]));
+
+        return new NumberLiteralNode{ascii};
+    }
+
     throw std::runtime_error("P: E27 | Expected expression at line " + std::to_string(peek().line));
 }
 
@@ -848,7 +885,7 @@ void printAST(ASTNode* node, int depth) {
             printAST(arg, depth + 1);
         }
     }
-    
+
     else if (auto field = dynamic_cast<FieldAccessNode*>(node)) {
         std::cout << indent << "FieldAccess: ." << field->field.value << "\n";
         printAST(field->target, depth + 1);

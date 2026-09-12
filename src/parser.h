@@ -43,6 +43,7 @@ class Parser {
         ASTNode* primary();
         ASTNode* block();
         ASTNode* parseDotAccess(Token targetName);
+        Param parseParam();
         typeBlockInfo typeBlock();
         ASTNode* exprstatement();
         ASTNode* assignStatement(ASTNode* target);

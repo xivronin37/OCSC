@@ -24,9 +24,8 @@ struct StructInfo {
 
 
 class SymbolTable  {
-    private:
-        std::unordered_map<std::string, TokenType> table;
     public:
+        std::unordered_map<std::string, TokenType> table;
         std::unordered_map<std::string, ArrayInfo> arrays;
 
         std::unordered_map<std::string, MapInfo> maps;
@@ -38,6 +37,8 @@ class SymbolTable  {
         bool isDeclared(const std::string& name) const;
         bool arrayExists(const std::string& name) const;
         void remove(const std::string& name);
+        void arrayRemove(const std::string& name);
+        void mapRemove(const std::string& name);
         void mapDeclare(const std::string& name, TokenType& keyType,  TokenType& valueType, bool isImmutable);
         bool mapExists(const std::string& name) const;
         TokenType mapKeyType(const std::string& name) const;
@@ -47,6 +48,7 @@ class SymbolTable  {
 struct FuncType {
     TokenType type;
     std::vector<TokenType> paramTypes;
+    std::vector<bool> isReference;
 };
 
 

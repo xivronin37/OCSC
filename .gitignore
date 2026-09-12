@@ -3,3 +3,7 @@
 .vscode/
 
 .s
+
+build/
+
+tests/
