@@ -75,6 +75,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::Hash: return "Hash";
         case TokenType::Question: return "Question";
         case TokenType::Character: return "Character";
+        case TokenType::Struct: return "Struct";
         case TokenType::Char: return "Char";
         case TokenType::Null: return "Null";
         case TokenType::UnsignedInt: return "UnsignedInt";
@@ -520,7 +521,27 @@ ASTNode* Parser::exprstatement() {
 }
 
 ASTNode* Parser::expression() {
-    return comparison();
+    return logicalOr();
+}
+
+ASTNode* Parser::logicalOr() {
+    ASTNode* left = logicalAnd();
+    while (peek().type == TokenType::L_OR) {
+        Token op = advance();
+        ASTNode* right = logicalAnd();
+        left = new BinaryExprNode(left, op, right);
+    }
+    return left;
+}
+
+ASTNode* Parser::logicalAnd() {
+    ASTNode* left = comparison();
+    while (peek().type == TokenType::L_AND) {
+        Token op = advance();
+        ASTNode* right = comparison();
+        left = new BinaryExprNode(left, op, right);
+    }
+    return left;
 }
 
 ASTNode* Parser::comparison() {
@@ -560,6 +581,13 @@ ASTNode* Parser::factor() {
 }
 
 ASTNode* Parser::primary() {
+    if (peek().type == TokenType::LParen) {
+        advance();
+        ASTNode* inner = expression();
+        expect(TokenType::RParen);
+        return inner;
+    }
+
     if (peek().type == TokenType::Int || peek().type == TokenType::Float) {
         // check numbers
 
@@ -598,7 +626,7 @@ ASTNode* Parser::primary() {
                 isGrouped = true;
             }
 
-            ASTNode* index = expression();
+            ASTNode* index = term();
 
             if (isGrouped) expect(TokenType::RParen);
 
@@ -646,7 +674,12 @@ ASTNode* Parser::primary() {
         // if calling function
 
         expect(TokenType::Call);
-        Token name = expect(TokenType::Identifier);
+        Token name;
+        if (peek().type == TokenType::Identifier || peek().type == TokenType::Inst) {
+            name = advance();
+        } else {
+            throw std::runtime_error(std::format("P: E75 | Expected identfier or inst call at line {}, column {}", peek().line, peek().column));
+        }
 
         if (peek().type == TokenType::Dot) {
             return parseDotAccess(name);

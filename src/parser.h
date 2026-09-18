@@ -37,6 +37,8 @@ class Parser {
         ASTNode* mapDecl(Token name);
         std::vector<ASTNode*> parseList(TokenType expectedType);
         ASTNode* expression();
+        ASTNode* logicalOr();
+        ASTNode* logicalAnd();
         ASTNode* comparison();
         ASTNode* term();
         ASTNode* factor();

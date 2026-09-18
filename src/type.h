@@ -48,6 +48,7 @@ class SymbolTable  {
 struct FuncType {
     TokenType type;
     std::vector<TokenType> paramTypes;
+    std::string returnStructName;
     std::vector<bool> isReference;
 };
 
@@ -56,9 +57,8 @@ inline std::unordered_map<std::string, FuncType> functions;
 
 class TypeChecker {
     private:
-
         TokenType returnType = TokenType::Sentinel;
-        
+        std::string returnStructName = "";
         std::string lastStructName;
 
         bool nameTaken(const std::string& name);
@@ -69,7 +69,9 @@ class TypeChecker {
 
         std::unordered_map<std::string, std::string> instances;
 
-        TokenType TypeCheckMethod(FuncDeclNode* funcDecl, const std::string& structName);
+        void registerMethodSignature(FuncDeclNode* funcDecl, const std::string& structName);
+
+        void checkMethodBody(FuncDeclNode* funcDecl, const std::string& structName);
         
         TypeChecker() = default;
         TokenType TypeCheck(ASTNode* node);

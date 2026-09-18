@@ -95,14 +95,22 @@ bool TypeChecker::nameTaken(const std::string& name) {
     return symbols.isDeclared(name);
 }
 
-TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string& structName) {
-    std::string key = structName + "_" + funcDecl->name.value;
+void TypeChecker::registerMethodSignature(FuncDeclNode* funcDecl, const std::string& structName) {
+     std::string key = structName + "_" + funcDecl->name.value;
     if (nameTaken(key)) {
-        throw std::runtime_error("TC: E19-2 | '" + key + "' is already declared");
+        throw std::runtime_error("TC: E19-3 | '" + key + "' is already declared");
     }
 
     FuncType current;
     current.type = funcDecl->returnType.type;
+    if (current.type == TokenType::Identifier) {
+            current.returnStructName = funcDecl->returnType.value;
+            if (structTable.find(current.returnStructName) == structTable.end()) {
+                throw std::runtime_error("TC: E73-3 | Unknown return type '" + current.returnStructName + "' for '" + funcDecl->name.value + "'");
+            }
+            current.type = TokenType::Struct;
+        }
+    
     if (current.type == TokenType::Char) {
         current.type = TokenType::Int;
     }
@@ -118,12 +126,17 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
     }
 
     functions[key] = current;
+}
 
+void TypeChecker::checkMethodBody(FuncDeclNode* funcDecl, const std::string& structName) {
+    std::string key = structName + "_" + funcDecl->name.value;
+    FuncType current = functions[key];
     for (auto param : funcDecl->parameters) {
         symbols.declare(param.name.value, param.type.type);
     }
 
     returnType = current.type;
+    returnStructName = current.returnStructName;
 
     instances["inst"] = structName;
 
@@ -135,6 +148,7 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
     TypeCheck(funcDecl->body);
 
     returnType = TokenType::Sentinel;
+    returnStructName = "";
 
     for (auto param : funcDecl->parameters) {
         symbols.remove(param.name.value);
@@ -158,8 +172,6 @@ TokenType TypeChecker::TypeCheckMethod(FuncDeclNode* funcDecl, const std::string
     for (auto& k : toRemoveScalars) symbols.remove(k);
     for (auto& k : toRemoveArrays) symbols.arrayRemove(k);
     for (auto& k : toRemoveMaps) symbols.mapRemove(k);
-
-    return current.type;
 }
 
 TokenType TypeChecker::TypeCheck(ASTNode* node) {
@@ -168,6 +180,9 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
     }
 
     if (auto id = dynamic_cast<IdentifierNode*>(node)) {
+        if (instances.find(id->value) != instances.end()) {
+            return TokenType::Struct;
+        }
         return symbols.lookup(id->value);
     }
 
@@ -186,6 +201,13 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             case TokenType::GreaterThanOrEqual:
             case TokenType::EqualEqual:
             case TokenType::NotEqual:
+                return TokenType::Bool;
+
+            case TokenType::L_AND:
+            case TokenType::L_OR:
+                if (leftType != TokenType::Bool) {
+                    throw std::runtime_error("TC: E72 | Logical operator requires Bool operands, got: " + tokenTypeName(leftType));
+                }
                 return TokenType::Bool;
             
             default: return leftType;
@@ -297,14 +319,20 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         info.fields = structDecl->fields;
         structTable[structDecl->name.value] = info;
         
+        // Pass 1
         for (auto method : structDecl->methods) {
             if (auto func = dynamic_cast<FuncDeclNode*>(method.second)) {
-                TypeCheckMethod(func, structDecl->name.value);
+                registerMethodSignature(func, structDecl->name.value);
             } else {
                 throw std::runtime_error("TC: E15 | Invalid method declaration for struct '" + structDecl->name.value + "'");
             }
 
             info.methods[method.first] = method.second;
+        }
+
+        // Pass 2
+        for (auto method : structDecl->methods) {
+            checkMethodBody(dynamic_cast<FuncDeclNode*>(method.second), structDecl->name.value);
         }
 
 
@@ -376,6 +404,7 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
             index++;
         }
 
+        lastStructName = typeStruct.returnStructName;
         return typeStruct.type;
     }
 
@@ -461,8 +490,28 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         FuncType current;
         current.type = funcDecl->returnType.type;
+        if (current.type == TokenType::Identifier) {
+            current.returnStructName = funcDecl->returnType.value;
+            current.returnStructName = funcDecl->returnType.value;
+            if (structTable.find(current.returnStructName) == structTable.end()) {
+                throw std::runtime_error("TC: E73-1 | Unknown return type '" + current.returnStructName + "' for '" + funcDecl->name.value + "'");
+            }
+        }
+
+        if (current.type == TokenType::Char) {
+            current.type = TokenType::Int;
+        }
+
         for (auto param : funcDecl->parameters) {
-            current.paramTypes.push_back(param.type.type);
+            TokenType paramType = param.type.type;
+            if (paramType == TokenType::Char) {
+                paramType = TokenType::Int;
+            }
+            if (paramType == TokenType::Identifier) {
+                paramType = TokenType::Struct;
+            }
+
+            current.paramTypes.push_back(paramType);
             current.isReference.push_back(param.isReference);
         }
 
@@ -470,13 +519,18 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
 
         for (auto param : funcDecl->parameters) {
             symbols.declare(param.name.value, param.type.type);
+            if (param.type.type == TokenType::Identifier) {
+                instances[param.name.value] = param.type.value;
+            }
         }
 
         returnType = current.type;
+        returnStructName = current.returnStructName;
 
         TypeCheck(funcDecl->body);
 
         returnType = TokenType::Sentinel;
+        returnStructName = "";
 
         for (auto param : funcDecl->parameters) {
             symbols.remove(param.name.value);
@@ -612,7 +666,7 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
         for (auto argument : callNode->arguments) {
             TokenType type = TypeCheck(argument);
             if (type != typeStruct.paramTypes[index]) {
-                throw std::runtime_error("TC: E22 | Expected type: " + tokenTypeName(typeStruct.paramTypes[index]) + "Got: " + tokenTypeName(type));
+                throw std::runtime_error("TC: E22 | Expected type: " + tokenTypeName(typeStruct.paramTypes[index]) + " Got: " + tokenTypeName(type));
             }
             if (typeStruct.isReference[index]) {
                 if (!dynamic_cast<IdentifierNode*>(argument)) {
@@ -628,11 +682,15 @@ TokenType TypeChecker::TypeCheck(ASTNode* node) {
     if (auto outNode = dynamic_cast<OutNode*>(node)) {
         TokenType outType = TypeCheck(outNode->output);
 
-        if (outType == returnType) {
-            return outType;
-        } else {
-            throw std::runtime_error("TC: E23 | Expected: " + tokenTypeName(returnType) + " Got: " + tokenTypeName(outType));
+        if (outType != returnType) {
+            throw std::runtime_error("TC: E23 | Expected out: " + tokenTypeName(returnType) + " Got: " + tokenTypeName(outType));
         }
+
+        if (returnType == TokenType::Struct && lastStructName != returnStructName) {
+            throw std::runtime_error("TC: E74 | Expected struct out '" + lastStructName + " Got: '" + returnStructName + "'");
+        }
+
+        return outType;
     }
 
     if (auto printValue = dynamic_cast<PrintNode*>(node)) {

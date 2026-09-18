@@ -74,6 +74,11 @@ int countVarDecl(ASTNode* node) {
     }
     
     if (auto inst = dynamic_cast<InstanceNode*>(node)) {
+        if (inst->arguments.size() == 0) {
+        counter += 1;
+        } else {
+            counter += inst->arguments.size();
+        }
         for (auto arg : inst->arguments) {
             counter += countVarDecl(arg);
         }
@@ -89,6 +94,10 @@ int countVarDecl(ASTNode* node) {
         counter += 3;
     }
 
+    if (auto outNode = dynamic_cast<OutNode*>(node)) {
+        counter += countVarDecl(outNode->output);
+    }
+
     return counter;
 }
 
@@ -98,6 +107,7 @@ void CodeGen::emit(const std::string& line, bool indent) {
 }
 
 void CodeGen::genMethod(FuncDeclNode* method, const std::string& structName) {
+    typeCheck.instances["inst"] = structName;
     std::string name = structName + "_" + method->name.value;
     emit(std::format("jmp .L_skip_{}", name));
     emit(name + ":", false);
@@ -261,15 +271,19 @@ void CodeGen::genNode(ASTNode* node) {
         if (auto inst = dynamic_cast<InstanceNode*>(varDecl->value)) {
             bool first = true;
             int baseOffset = 0;
-
-            for (size_t i = 0; i < inst->arguments.size(); i++) {
-                genNode(inst->arguments[i]);
-                currentOffset -= 8;
-                if (first) {
+            if (inst->arguments.size() == 0) {
+                    currentOffset -= 8;
                     baseOffset = currentOffset;
-                    first = false;
+            } else {
+                for (size_t i = 0; i < inst->arguments.size(); i++) {
+                    genNode(inst->arguments[i]);
+                    currentOffset -= 8;
+                    if (first) {
+                        baseOffset = currentOffset;
+                        first = false;
+                    }
+                    emit(std::format("movq %rax, {}(%rbp)", currentOffset));
                 }
-                emit(std::format("movq %rax, {}(%rbp)", currentOffset));
             }
             symbolTable[name] = baseOffset;
         }
@@ -279,7 +293,7 @@ void CodeGen::genNode(ASTNode* node) {
             symbolTable[name] = currentOffset;
             emit(std::format("movq %rax, {}(%rbp)", currentOffset));
 
-            if (varDecl->type.type == TokenType::Str) {
+            if (varDecl->type.type == TokenType::Str || varDecl->type.type == TokenType::Identifier) {
                 isReferenceSlot[name] = true;
             }
         }
@@ -405,7 +419,7 @@ void CodeGen::genNode(ASTNode* node) {
 
         int finalOffset = -count*8;
 
-        if (target->value == "inst") {
+        if (isReferenceSlot[target->value]) {
             emit(std::format("movq {}(%rbp), %r8", baseOffset));
             emit(std::format("movq {}(%r8), %rax", finalOffset));
         } else {
@@ -573,7 +587,7 @@ void CodeGen::genNode(ASTNode* node) {
 
             int finalOffset = -count * 8;
 
-            if (target->value == "inst") {
+            if (isReferenceSlot[target->value]) {
                 emit(std::format("movq {}(%rbp), %r8", baseOffset));
                 emit(std::format("movq %rax, {}(%r8)", finalOffset));
             } else {
@@ -595,6 +609,28 @@ void CodeGen::genNode(ASTNode* node) {
             emit(std::format("movq %rax, {}(%rbp,%rbx,8)", baseOffset));
         }
 
+    }
+
+    if (auto inst = dynamic_cast<InstanceNode*>(node)) {
+        bool first = true;
+        int baseOffset = 0;
+        
+        if (inst->arguments.size() == 0) {
+            currentOffset -= 8;
+            baseOffset = currentOffset;
+        } else {
+            for (size_t i = 0; i < inst->arguments.size(); i++) {
+                genNode(inst->arguments[i]);
+                currentOffset -= 8;
+                if (first) {
+                    baseOffset = currentOffset;
+                    first = false;
+                }
+                emit(std::format("movq %rax, {}(%rbp)", currentOffset));
+            }
+        }
+
+        emit(std::format("leaq {}(%rbp), %rax", baseOffset));
     }
 
     if (auto ifNode = dynamic_cast<IfNode*>(node)) {

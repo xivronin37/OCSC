@@ -35,6 +35,7 @@ char Lexer::resolveEscape() {
     switch (code) {
         case 'n': return '\n';
         case 't': return '\t';
+        case 'r': return '\r';
         case '0': return '\0';
         default:
             throw std::runtime_error(std::format("L: E70 | Unknown escape sequence $${} at line {}, column {}", code, line, column));

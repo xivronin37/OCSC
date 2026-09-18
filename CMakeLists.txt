@@ -7,9 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 file(GLOB_RECURSE ALL_SOURCES "src/*.cpp")
 
-add_executable(OCompiler ${ALL_SOURCES})
+add_executable(OCSC ${ALL_SOURCES})
 
-set_target_properties(OCompiler PROPERTIES 
+set_target_properties(OCSC PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 

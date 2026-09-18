@@ -11,7 +11,7 @@
 
 int main(int argc, char* argv[]) {
     try {
-        std::filesystem::path filePath = "C:/Projects/O Compiler/a.ol";
+        std::filesystem::path filePath = "C:/Projects/OCSC/a.ol";
         std::string source = readFile(filePath.string());
 
         bool showTokens = false;
@@ -31,7 +31,7 @@ int main(int argc, char* argv[]) {
 
         if (showTokens) {
             for (const auto& token : tokens) {
-                std::cout << "Type: " << tokenTypeName(token.type) << " | Lexeme: \"" << token.value << "\" | Line: " << token.line << std::endl;
+                std::cout << "Type: " << tokenTypeName(token.type) << " | Lexeme: \"" << token.value << "\" | Ln " << token.line << " Col " << token.column << std::endl;
             }
         }
 

@@ -1,4 +1,4 @@
-# O Syntax
+# Optima Syntax
 
 | Category | Type | Syntax Example / Description |
 | :--- | :--- | :--- |
@@ -58,10 +58,9 @@ else [
 ```
 ### While:
 ``` rust
-While:
-    while condition [
-        ...
-    ]
+while condition [
+    ...
+]
 ```
 
 ---
@@ -149,8 +148,8 @@ Can be used for both arrays and maps.
 let array: {arr(3), i}, \1, 2\;
 push(array, 3);
 
-let map: map(i, i, 3), \1, 2, 3\, \10, 20, 30\;
-push(map, 5, 50);
+let newMap: map(i, i, 3), \1, 2, 3\, \10, 20, 30\;
+push(newMap, 5, 50);
 ```
 
 ### Element Removal

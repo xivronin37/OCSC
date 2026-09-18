@@ -1,9 +1,11 @@
-.exe
+*.exe
 
 .vscode/
 
-.s
+*.s
+
+*.o
 
 build/
 
-tests/
+track.txt
